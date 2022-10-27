@@ -12,7 +12,6 @@ setup(
       'imageio',
       'matplotlib',
       'numpy',
-      'sympy',
-      'git+https://github.com/AndyLamperski/lemkelcp.git'
+      'sympy'
    ],
 )
