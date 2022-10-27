@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Polygon
 
-from src import file_utils
-from src.two_dim_polytope import TwoDimensionalPolytopeParams, \
+from toy_2d.src import file_utils
+from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                  TwoDimensionalPolytope
 
 

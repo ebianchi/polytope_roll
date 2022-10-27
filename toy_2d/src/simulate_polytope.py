@@ -11,8 +11,8 @@ import pdb
 import matplotlib.pyplot as plt
 import lemkelcp as lcp
 
-from src import vis_utils
-from src.two_dim_polytope import TwoDimensionalPolytopeParams, \
+from toy_2d.src import vis_utils
+from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                  TwoDimensionalPolytope
 
 
