@@ -4,8 +4,10 @@ that allow for easy calculation of useful quantities including:
     - mass matrix
     - contact jacobians
     - continuous forces
-
-Notation largely follows Stewart and Trinkle, 1996.
+    - interbody distances
+... which include all terms required for inelastic rigid body simulation via a
+linear complementarity problem (LCP).  Notation and formulation largely follow
+Stewart and Trinkle, 1996.
 """
 
 from dataclasses import dataclass, field
@@ -27,7 +29,8 @@ class TwoDimensionalPolytopeParams:
 class TwoDimensionalPolytope:
     """A 2D Polytope.
 
-    For any of the histories, the end of the list is the most recent entry.
+    Embedded in this class's methods is the assumption that there is a table at
+    height y=0 in the scene and no other objects.
 
     Properties:
         params:      2D polytope parameters, including geometry, friction, and
@@ -57,9 +60,13 @@ class TwoDimensionalPolytope:
         self.n_dims = 2
 
         # Set up a Jacobian function for later calculation of contact Jacobians.
-        self.jac_func = self._set_up_contact_jacobian_function()
+        self.jac_func = self.__set_up_contact_jacobian_function()
 
     def get_vertex_locations_world(self, state):
+        """Get the locations of the polytope's vertices in world coordinates,
+        given the system's current state.  Returns a numpy array of size
+        (n_contacts, 2) for the (x,y) position of each vertex."""
+
         # State is in form [x, dx, y, dy, th, dth].
         x, y, theta = state[0], state[2], state[4]
 
@@ -76,7 +83,11 @@ class TwoDimensionalPolytope:
                                             y + radius * np.sin(phi + theta)])
         return corners_world
 
-    def _get_vertex_velocities_world(self, state):
+    def __get_vertex_velocities_world(self, state):
+        """Get the velocities of the polytope's vertices in world coordinates,
+        given the system's current state.  Returns a numpy array of size
+        (n_contacts, 2) for the (vx,vy) velocity of each vertex."""
+
         # State is in form [x, dx, y, dy, th, dth].
         x, y, theta = state[0], state[2], state[4]
         vx, vy, vth = state[1], state[3], state[5]
@@ -97,7 +108,15 @@ class TwoDimensionalPolytope:
                                                 vy + roty_contribution])
         return corner_velocities
 
-    def _set_up_contact_jacobian_function(self):
+    def __set_up_contact_jacobian_function(self):
+        """Create a callable function that returns the (2, 3) jacobian
+        representing the partial derivative of a vertex's world-frame velocity
+        with respect to the polytope's world-frame velocity.  This left-
+        multiplied by a unit direction vector(s) yields the normal
+        (corresponding to a vertical unit vector) and tangential (corresponding
+        to horizontal unit vectors) contact jacobians later used for simulation.
+        """
+
         # First, write a symbolic expression of a vertex's velocity given its
         # location relative to the object's CoM and the object's velocities.
         px_body, py_body, theta, vx, vy, vth = sympy.symbols(
@@ -123,12 +142,15 @@ class TwoDimensionalPolytope:
 
         return jac_func
 
-    def _calculate_contact_jacobian_along_projections(self, state, projs):
+    def __calculate_contact_jacobian_along_projections(self, state, projs):
+        """Calculate the contact jacobian of all vertices along given projection
+        direction(s)."""
+
         # State is in form [x, dx, y, dy, th, dth].
         x, y, theta = state[0], state[2], state[4]
         vx, vy, vth = state[1], state[3], state[5]
 
-        # The N matrix will be of size (n_config, n_contacts).
+        # The resulting matrix will be of size (n_config, n_contacts * n_projs).
         n = self.n_config
         p = self.n_contacts
 
@@ -144,49 +166,80 @@ class TwoDimensionalPolytope:
 
         return contact_jac
 
-    def get_M_matrix(self, state):
+    def get_M_matrix(self, _):
+        """Calculate the mass matrix.  Note that since the polytope is not
+        articulated and is represented by a mass at its origin, the mass matrix
+        is not state dependent."""
+
         m = self.params.mass
         I = self.params.moment_inertia
         return np.diag([m, m, I])
 
     def get_D_matrix(self, state):
+        """Calculate the tangential contact jacobian of all vertices. Returns a
+        numpy array of size (n_config, n_contacts * n_friction) or (3,
+        n_contacts * 2) for each vertex's positive and negative x-direction
+        effect on the 3 generalized coordinates."""
+
         # Use projection in +/- x-directions.
         projs = np.array([[1, 0], [-1, 0]])
-        return self._calculate_contact_jacobian_along_projections(state, projs)
+        return self.__calculate_contact_jacobian_along_projections(state, projs)
 
     def get_N_matrix(self, state):
+        """Calculate the normal contact jacobian of all vertices. Returns a
+        numpy array of size (n_config, n_contacts) or (3, n_contacts) for each
+        vertex's positive y-direction effect on the 3 generalized coordinates.
+        """
+
         # Use projection in y-direction.
         proj = np.array([[0, 1]])
-        return self._calculate_contact_jacobian_along_projections(state, proj)
+        return self.__calculate_contact_jacobian_along_projections(state, proj)
 
-    def get_mu_matrix(self, state):
+    def get_mu_matrix(self, _):
+        """Calculate the friction matrix.  We assume this is not state
+        dependent."""
+
         mu = self.params.mu_ground
         p = self.n_contacts
         return mu * np.eye(p)
 
-    def get_E_matrix(self, state):
+    def get_E_matrix(self, _):
+        """Calculate the matrix E, defined by a block diagonal matrix composed
+        of n_contacts repeats of ones vectors of size (n_friction, 1), or (2, 1)
+        for this 2D example.  This is fixed and thus is not state dependent."""
+
         p = self.n_contacts
         k = self.n_friction
 
         return np.kron(np.eye(p, dtype=int), np.ones((k,1)))
 
     def get_C_matrix(self, state):
-        # C is the (n_config, n_config) Coriolis/centrifugal matrix where:
-        # C = grad_q(M*v) * v - 0.5 * (grad_q(M*v))^T * v
-        # However, with this single, symmetric rigid body, this must be 0.
+        """Calculate the (n_config, n_config) Coriolis/centrifugal matrix.  This
+        is defined as:
+
+            C = grad_q(M*v) * v - 0.5 * (grad_q(M*v))^T * v
+
+        Note that since the polytope's mass matrix (and generalized velocities)
+        are not configuration dependent, this is zero."""
+
         n = self.n_config
         return np.zeros((n, n))
 
     def get_G_vector(self, state):
-        # G is the (n_config, 1) vector of gravitational forces.
+        """Calculate the (n_config, 1) vector of gravitational forces."""
+
         m = self.params.mass
         g = -9.81
-
         return np.array([0, -m*g, 0]).reshape(self.n_config, 1)
 
     def get_k_vector(self, state):
-        # k is the (n_config, 1) vector of continuous forces, calculated as:
-        # k = -C * v - G
+        """Calculate the (n_config, 1) vector of continuous forces.  This vector
+        aggregates all contributions due to gravity, Coriolis, and centrifugal
+        forces, and it is defined as:
+
+            k = -C*v - G
+        """
+
         C = self.get_C_matrix(state)
         G = self.get_G_vector(state)
 
@@ -196,8 +249,9 @@ class TwoDimensionalPolytope:
         return -C @ v - G
 
     def get_phi(self, state):
+        """Calculate the (n_contacts, 1) vector of interbody distances between
+        each vertex and the ground."""
+
         corners = self.get_vertex_locations_world(state)
         return corners[:, 1].reshape(self.n_contacts, 1)
-
-
 

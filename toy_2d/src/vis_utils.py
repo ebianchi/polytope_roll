@@ -17,7 +17,8 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
 
 """Make and save a gif of the polytope's state trajectory."""
 def animation_gif_polytope(polytope, states, gif_name, dt, controls=None):
-    # subsample the states and controls to get 10 samples per second
+    # Subsample the states and controls to get 10 samples per second of
+    # simulated data.
     step = int(0.1/dt)
     if step > 1:
         states = states[0::step]
@@ -93,18 +94,3 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None):
         os.remove(filename)
 
     print(f'Saved gif at {gif_file}')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

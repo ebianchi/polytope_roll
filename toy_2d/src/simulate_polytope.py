@@ -13,21 +13,30 @@ import lemkelcp as lcp
 
 from toy_2d.src import vis_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
-                                 TwoDimensionalPolytope
+                                        TwoDimensionalPolytope
 
 
-# fixed parameters
+# Fixed parameters
+# A few polytope examples.
 SQUARE_CORNERS = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
 STICK_CORNERS = np.array([[1, 0], [-1, 0]])
 RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
+
+# Polytope properties
 MASS = 1
 MOM_INERTIA = 0.01
 MU_GROUND = 0.3
-MU_CONTROL = 0.5
-DT = 0.002
-EPS = 1e-5
 
-# in order of x, dx, y, dy, theta, dtheta
+# Control properties
+MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
+                    # this to help define a set of feasible control forces.
+
+# Simulation parameters.
+DT = 0.002          # If a generated trajectory looks messed up, it could be
+                    # fixed by making this timestep smaller.
+EPS = 1e-5          # A small regularization term to assist the LCP solve.
+
+# Initial conditions, in order of x, dx, y, dy, theta, dtheta
 x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
 
 

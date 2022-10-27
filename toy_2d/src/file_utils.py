@@ -1,6 +1,5 @@
 # File utilities
 
-
 import os.path as op
 import os
 
