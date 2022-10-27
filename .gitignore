@@ -1,0 +1,13 @@
+# Python virtual environment
+venv
+
+# Temporary and output files
+toy_2d/out/
+toy_2d/tmp/
+
+# Compiled code
+*.pyc
+*.cfg
+
+# Egg info
+polytope_roll.egg-info
