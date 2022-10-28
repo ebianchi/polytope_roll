@@ -5,8 +5,8 @@ import os
 
 
 ROOT_DIR = op.dirname(op.dirname(op.abspath(__file__)))
-TEMP_DIR = f'{ROOT_DIR}/tmp'
-OUT_DIR = f'{ROOT_DIR}/out'
+TEMP_DIR = assure_created(op.join(ROOT_DIR, 'tmp'))
+OUT_DIR = assure_created(op.join(ROOT_DIR, 'out'))
 
 
 def assure_created(directory: str) -> str:
@@ -24,8 +24,3 @@ def assure_created(directory: str) -> str:
         assure_created(op.dirname(directory))
         os.mkdir(directory)
     return directory
-
-
-# Make sure the temp and out directories exist, if not already.
-assure_created(TEMP_DIR)
-assure_created(OUT_DIR)
