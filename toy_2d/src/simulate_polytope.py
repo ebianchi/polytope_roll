@@ -181,7 +181,7 @@ params = TwoDimensionalPolytopeParams(
     mu_ground = MU_GROUND,
     vertex_locations = SQUARE_CORNERS
 )
-polytope = TwoDimensionalPolytope(None, params)
+polytope = TwoDimensionalPolytope(params)
 
 
 states = x0.reshape(1, 6)

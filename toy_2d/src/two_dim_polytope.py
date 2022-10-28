@@ -48,7 +48,7 @@ class TwoDimensionalPolytope:
     n_friction: int
     n_dims: int
 
-    def __init__(self, state, params: TwoDimensionalPolytopeParams):
+    def __init__(self, params: TwoDimensionalPolytopeParams):
         self.params = params
 
         vertex_locations = self.params.vertex_locations
