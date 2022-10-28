@@ -9,9 +9,9 @@ vector is 6-dimensional.
 import numpy as np
 import pdb
 import matplotlib.pyplot as plt
-import lemkelcp as lcp
 
 from toy_2d.src import vis_utils
+from toy_2d.src import solver_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                         TwoDimensionalPolytope
 
@@ -34,7 +34,6 @@ MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
 # Simulation parameters.
 DT = 0.002          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
-EPS = 1e-5          # A small regularization term to assist the LCP solve.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
 x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
@@ -123,17 +122,6 @@ def get_simulation_terms(polytope, state, dt, control_force, control_loc):
 
     return M, D, N, E, Mu, k, u, q0, v0, phi
 
-"""Solve a single Linear Complementarity Problem."""
-def solve_lcp(lcp_mat, lcp_vec):
-    # Add in a small regularizing term to help with the LCP solve.
-    lcp_mat += EPS * np.eye(lcp_mat.shape[0])
-
-    # Solve the LCP.
-    sol, exit_code, msg = lcp.lemkelcp(lcp_mat, lcp_vec, maxIter = 1000)
-
-    assert exit_code == 0, msg
-    return sol
-
 """Given the current state, a timestep, control_force (given as (2,) array for
 one control force), and control_loc (given as (2,) array for one location),
 simulate the system one timestep into the future.  This function necessarily
@@ -169,7 +157,7 @@ def step_dynamics(polytope, state, dt, control_force, control_loc):
     lcp_vec = np.vstack((vec_top, vec_mid, vec_bot))
 
     # Get and use the LCP solution.
-    lcp_sol = solve_lcp(lcp_mat, lcp_vec)
+    lcp_sol = solver_utils.solve_lcp(lcp_mat, lcp_vec)
 
     Beta = lcp_sol[:p*k_friction].reshape(p*k_friction, 1)
     Cn = lcp_sol[p*k_friction:p*k_friction + p].reshape(p, 1)
