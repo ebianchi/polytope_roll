@@ -96,7 +96,9 @@ def get_simulation_terms(polytope, state, dt, control_force, control_loc):
     v0 = np.array([state[1], state[3], state[5]]).reshape(3, 1)
 
     # Some of these quantities are more accurate if calculated at a point in the
-    # future, so create a mid-state.
+    # future, so create a mid-state.  These midstates are defined for the mass
+    # matrix, M, and the continuous force vector, k, in the top Equation 27 of
+    # Stewart and Trinkle 1996.
     q_mid_for_M = q0 + dt*v0
     q_mid_for_k = q0 + dt*v0/2
 
@@ -152,6 +154,9 @@ def step_dynamics(polytope, state, dt, control_force, control_loc):
                                             dt, control_force, control_loc)
     M_i = np.linalg.inv(M)
 
+    # Formulating this inelastic frictional contact dynamics as an LCP is given
+    # in Stewart and Trinkle 1996 (see Equation 29 for the structure of the
+    # lcp_mat and lcp_vec).
     mat_top = np.hstack((D.T @ M_i @ D, D.T @ M_i @ N, E))
     mat_mid = np.hstack((N.T @ M_i @ D, N.T @ M_i @ N, np.zeros((p,p))))
     mat_bot = np.hstack((-E.T, Mu, np.zeros((p,p))))

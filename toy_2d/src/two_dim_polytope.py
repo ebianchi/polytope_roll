@@ -213,7 +213,7 @@ class TwoDimensionalPolytope:
 
         return np.kron(np.eye(p, dtype=int), np.ones((k,1)))
 
-    def get_C_matrix(self, state):
+    def get_C_matrix(self, _):
         """Calculate the (n_config, n_config) Coriolis/centrifugal matrix.  This
         is defined as:
 
@@ -225,7 +225,7 @@ class TwoDimensionalPolytope:
         n = self.n_config
         return np.zeros((n, n))
 
-    def get_G_vector(self, state):
+    def get_G_vector(self, _):
         """Calculate the (n_config, 1) vector of gravitational forces."""
 
         m = self.params.mass
