@@ -25,14 +25,37 @@ class TwoDimensionalSystem:
     polytope, with the ability to set control inputs.
 
     Properties:
-        params:      2D system parameters, including a time step, a 2D polytope
-                     object, and the friction parameter between a controller
-                     contact and the polytope.
+        params:             2D system parameters, including a time step, a 2D
+                            polytope object, and the friction parameter between
+                            a control contact and the polytope.
+        state_history:      (T, 6) numpy array of the state trajectory of the
+                            system.
+        control_history:    (T-1, 4) numpy array of the control input history of
+                            the system, stored as [fx, fy, locx, locy].  This
+                            form is more convenient for plotting.  From this
+                            information, it is simple to get the controls in
+                            generalized coordinates using the system's
+                            convert_input_to_generalized_coords method.
     """
     params: TwoDimensionalSystemParams
 
     def __init__(self, params: TwoDimensionalSystemParams):
         self.params = params
+
+        # Initialize histories to be empty.
+        self.state_history = np.zeros((0, 6))
+        self.control_history = np.zeros((0, 4))
+
+    def __check_consistent_histories(self):
+        """Check that the history lengths are compatible."""
+        state_len = self.state_history.shape[0]
+        control_len = self.control_history.shape[0]
+
+        if state_len == 0:
+            assert control_len == 0
+
+        else:
+            assert state_len - control_len == 1
 
     def __step_dynamics_no_ground_contact(self, state, control_force,
                                           control_loc):
@@ -113,7 +136,34 @@ class TwoDimensionalSystem:
 
         return M, D, N, E, Mu, k, u, q0, v0, phi
 
-    def step_dynamics(self, state, control_force, control_loc):
+    def set_initial_state(self, state):
+        """Set the initial state of the system.  This method will automatically
+        clear out the state and control histories of the system and set the
+        initial state to that provided as an argument."""
+        
+        # Clear out the histories, setting the first state_history entry to the
+        # provided state.
+        self.state_history = state.reshape(1, 6)
+        self.control_history = np.zeros((0, 4))
+
+    def step_dynamics(self, control_force, control_loc):
+        """Given new control inputs, step the system forward in time, appending
+        the next state and provided controls to the end of the state and control
+        history arrays, respectively."""
+
+        # Check that the histories are consistent.
+        self.__check_consistent_histories()
+
+        # Get the current state and step the dynamics.
+        state = self.state_history[-1, :]
+        next_state = self.__step_dynamics(state, control_force, control_loc)
+
+        # Set the state and control histories.
+        control_entry = np.hstack((control_force, control_loc))
+        self.state_history = np.vstack((self.state_history, next_state))
+        self.control_history = np.vstack((self.control_history, control_entry))        
+
+    def __step_dynamics(self, state, control_force, control_loc):
         """Given the current state, control_force (given as (2,) array for one
         control force), and control_loc (given as (2,) array for one location),
         simulate the system one timestep into the future.  This function
