@@ -62,7 +62,7 @@ class TwoDimensionalPolytope:
         # Set up a Jacobian function for later calculation of contact Jacobians.
         self.jac_func = self.__set_up_contact_jacobian_function()
 
-    def get_vertex_locations_world(self, state):
+    def get_vertex_locations_world(self, state, model=None):
         """Get the locations of the polytope's vertices in world coordinates,
         given the system's current state.  Returns a numpy array of size
         (n_contacts, 2) for the (x,y) position of each vertex."""
@@ -72,15 +72,27 @@ class TwoDimensionalPolytope:
 
         p = self.n_contacts
         corners_world = np.zeros((p, 2))
+    
+        # Since non-linear expressions aren't supported with Gurobi, I'm adding additional constraints, building this now
+        if(model):
+            y   =   model.addVars(p,lb = -1,ub = 1,name = "u_"+str(i))
+            for i in range(p):
+                corner_body = self.params.vertex_locations[i, :]
 
-        for i in range(p):
-            corner_body = self.params.vertex_locations[i, :]
+                phi = np.arctan2(corner_body[1], corner_body[0])
+                radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
 
-            phi = np.arctan2(corner_body[1], corner_body[0])
-            radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
+                corners_world[i, :] = np.array([x + radius * np.cos(phi + theta),
+                                                y + radius * np.sin(phi + theta)])
+        else:
+            for i in range(p):
+                corner_body = self.params.vertex_locations[i, :]
 
-            corners_world[i, :] = np.array([x + radius * np.cos(phi + theta),
-                                            y + radius * np.sin(phi + theta)])
+                phi = np.arctan2(corner_body[1], corner_body[0])
+                radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
+
+                corners_world[i, :] = np.array([x + radius * np.cos(phi + theta),
+                                                y + radius * np.sin(phi + theta)])
         return corners_world
 
     def __get_vertex_velocities_world(self, state):

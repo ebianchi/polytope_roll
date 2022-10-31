@@ -15,6 +15,7 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
                                       TwoDimensionalSystem
 
+from collocation import find_rolling_trajectory
 
 # Fixed parameters
 # A few polytope examples.
@@ -36,7 +37,9 @@ DT = 0.002          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
+# x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
+x0 = np.array([0, 0, 1, 0, 0, 0])
+
 states = x0.reshape(1, 6)
 
 
@@ -58,6 +61,13 @@ system_params = TwoDimensionalSystemParams(
 )
 system = TwoDimensionalSystem(system_params)
 
+'''
+Collocation call
+'''
+final_state             =   np.array([0, 0, 1, 0, np.pi/2, 0])
+N                       =   10
+
+u                       =   find_rolling_trajectory(N, x0, final_state, 3.0, system, polytope)
 
 # Rollout with a fixed (body-frame) force at one of the vertices.
 system.set_initial_state(x0)
@@ -80,7 +90,7 @@ states = system.state_history
 controls = system.control_history
 control_forces, control_locs = controls[:, :2], controls[:, 2:]
 
-pdb.set_trace()
+# pdb.set_trace()
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
