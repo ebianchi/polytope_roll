@@ -9,9 +9,11 @@ setup(
    author_email='bibit@seas.upenn.edu',
    packages=['polytope_roll'],
    install_requires=[
+      'gurobipy',
       'imageio',
       'matplotlib',
       'numpy',
+      'scipy',
       'sympy'
    ],
 )
