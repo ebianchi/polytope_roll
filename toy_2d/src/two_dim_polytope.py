@@ -96,7 +96,7 @@ class TwoDimensionalPolytope:
             py = self.params.vertex_locations[i, 1]
 
             radii[i] = np.sqrt(px**2 + py**2)
-            angles[i] = np.atan2(py, px)
+            angles[i] = np.arctan2(py, px)
 
         return radii, angles
 
