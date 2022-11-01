@@ -83,6 +83,23 @@ class TwoDimensionalPolytope:
                                             y + radius * np.sin(phi + theta)])
         return corners_world
 
+    def get_vertex_radii_angles(self):
+        """It may be more convenient in some cases to represent each vertex as a
+        radius and angle instead of as a body-frame x and y offset.  Return the
+        (n_contacts,) numpy arrays of radii and angles."""
+
+        p = self.n_contacts
+        radii, angles = np.zeros((p,)), np.zeros((p,))
+
+        for i in range(p):
+            px = self.params.vertex_locations[i, 0]
+            py = self.params.vertex_locations[i, 1]
+
+            radii[i] = np.sqrt(px**2 + py**2)
+            angles[i] = np.atan2(py, px)
+
+        return radii, angles
+
     def __get_vertex_velocities_world(self, state):
         """Get the velocities of the polytope's vertices in world coordinates,
         given the system's current state.  Returns a numpy array of size
@@ -93,13 +110,13 @@ class TwoDimensionalPolytope:
         vx, vy, vth = state[1], state[3], state[5]
 
         p = self.n_contacts
+        radii, angles = self.get_vertex_radii_angles()
         corner_velocities = np.zeros((p, 2))
 
         for i in range(p):
             corner_body = self.params.vertex_locations[i, :]
 
-            phi = np.atan2(corner_body[1], corner_body[0])
-            radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
+            radius, phi = radii[i], angles[i]
 
             rotx_contribution = -vth * radius * np.sin(phi + theta)
             roty_contribution = vth * radius * np.cos(phi + theta)
