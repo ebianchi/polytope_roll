@@ -97,7 +97,7 @@ class TwoDimensionalSystem:
                                q_next[2], v_next[2]])
         return next_state
 
-    def __get_simulation_terms(self, state, control_force, control_loc):
+    def get_simulation_terms(self, state, control_force, control_loc):
         """Make one helper function to calculate all of the simulation-related
         terms of a system at the state."""
 
@@ -184,7 +184,7 @@ class TwoDimensionalSystem:
         # At this point, we've established that contact forces are necessary.
         # Need to solve LCP to get proper contact forces -- construct terms.
         p, k_friction = polytope.n_contacts, polytope.n_friction
-        M, D, N, E, Mu, k, u, q0, v0, phi = self.__get_simulation_terms(state,
+        M, D, N, E, Mu, k, u, q0, v0, phi = self.get_simulation_terms(state,
                                                     control_force, control_loc)
         M_i = np.linalg.inv(M)
 
