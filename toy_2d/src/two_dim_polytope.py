@@ -75,15 +75,25 @@ class TwoDimensionalPolytope:
     
         # Since non-linear expressions aren't supported with Gurobi, I'm adding additional constraints, building this now
         if(model):
-            y   =   model.addVars(p,lb = -1,ub = 1,name = "u_"+str(i))
+            corners_world = np.zeros((p, 2),dtype='object')
             for i in range(p):
                 corner_body = self.params.vertex_locations[i, :]
 
                 phi = np.arctan2(corner_body[1], corner_body[0])
                 radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
 
-                corners_world[i, :] = np.array([x + radius * np.cos(phi + theta),
-                                                y + radius * np.sin(phi + theta)])
+                phi_plus_theta      =   model.addVar()
+                cosine              =   model.addVar(-1,1)
+                sine                =   model.addVar(-1,1)
+
+                model.addConstr(phi_plus_theta==phi+theta)
+                model.addGenConstrCos(phi_plus_theta,cosine)
+                model.addGenConstrSin(phi_plus_theta,sine)
+
+                corners_world[i, :] = np.array([x + radius * cosine,
+                                                y + radius * sine])
+            return corners_world, model
+
         else:
             for i in range(p):
                 corner_body = self.params.vertex_locations[i, :]
@@ -153,8 +163,43 @@ class TwoDimensionalPolytope:
                                   contact_jac, 'numpy')
 
         return jac_func
+    
+    def __set_up_contact_jacobian_function_gurobi(self):
+        """Create a callable function that returns the (2, 3) jacobian
+        representing the partial derivative of a vertex's world-frame velocity
+        with respect to the polytope's world-frame velocity.  This left-
+        multiplied by a unit direction vector(s) yields the normal
+        (corresponding to a vertical unit vector) and tangential (corresponding
+        to horizontal unit vectors) contact jacobians later used for simulation.
+        """
 
-    def __calculate_contact_jacobian_along_projections(self, state, projs):
+        # First, write a symbolic expression of a vertex's velocity given its
+        # location relative to the object's CoM and the object's velocities.
+        px_body, py_body, theta, vx, vy, vth,model = sympy.symbols(
+                                            'px_body py_body theta vx vy vth model')
+
+        phi = sympy.atan2(py_body, px_body)
+        radius = sympy.sqrt(px_body**2 + py_body**2)
+
+        rotx_contrib = -vth * radius * sympy.sin(phi + theta)
+        roty_contrib = vth * radius * sympy.cos(phi + theta)
+
+        corner_vel = sympy.Matrix([vx + rotx_contrib, vy + roty_contrib])
+
+        # Second, get a callable function for the contact Jacobian of the vertex
+        # (this is the gradient of the vertex's velocity w.r.t. the system's
+        # velocities [vx, vy, vth]).  This will be of shape (n_dims, n_config)
+        # or (2, 3).
+        contact_jac = sympy.Matrix([corner_vel.diff(vx).T,
+                                    corner_vel.diff(vy).T,
+                                    corner_vel.diff(vth).T]).T
+        jac_func = sympy.lambdify([px_body, py_body, theta, vx, vy, vth],
+                                    contact_jac,model, 'numpy')
+
+        return jac_func
+
+
+    def __calculate_contact_jacobian_along_projections(self, state, projs,model=None):
         """Calculate the contact jacobian of all vertices along given projection
         direction(s)."""
 
@@ -172,11 +217,40 @@ class TwoDimensionalPolytope:
         for vertex_i in range(p):
             px_body, py_body = self.params.vertex_locations[vertex_i, :]
 
-            jac = self.jac_func(px_body, py_body, theta, vx, vy, vth)
+            if(model):
+                jac = self.jac_func_gurobi(px_body, py_body, theta, vx, vy, vth,model)
+            else:
+                jac = self.jac_func(px_body, py_body, theta, vx, vy, vth)
 
             contact_jac = np.hstack((contact_jac, (projs @ jac).T))
 
         return contact_jac
+    
+    def jac_func_gurobi(self,px_body, py_body, theta, vx, vy, vth,model):
+        '''
+        Approximates sympy func self.jac_func here
+        '''
+        phi     =   np.arctan2(py_body,px_body)
+        radius  =   np.sqrt(px_body**2 + py_body**2)
+
+        # Adding constraints for sin and cos 
+        phi_plus_theta      =   model.addVar()
+        cosine              =   model.addVar(-1,1)
+        sine                =   model.addVar(-1,1)
+
+        model.addConstr(phi_plus_theta==phi+theta)
+        model.addGenConstrCos(phi_plus_theta,cosine)
+        model.addGenConstrSin(phi_plus_theta,sine)
+
+        rotx_contrib    =   -vth * radius * sine
+        roty_contrib    =    vth * radius * cosine
+
+        # (2,3) matrix of gradient of vertex vel vs system's vel
+        req_matrix      =   np.array([[rotx_contrib,0],
+                                        [0,roty_contrib],
+                                        [-radius*sine, radius*cosine]]).reshape((2,3))
+        
+        return req_matrix
 
     def get_M_matrix(self, _):
         """Calculate the mass matrix.  Note that since the polytope is not
@@ -187,7 +261,7 @@ class TwoDimensionalPolytope:
         I = self.params.moment_inertia
         return np.diag([m, m, I])
 
-    def get_D_matrix(self, state):
+    def get_D_matrix(self, state,model=None):
         """Calculate the tangential contact jacobian of all vertices. Returns a
         numpy array of size (n_config, n_contacts * n_friction) or (3,
         n_contacts * 2) for each vertex's positive and negative x-direction
@@ -195,9 +269,9 @@ class TwoDimensionalPolytope:
 
         # Use projection in +/- x-directions.
         projs = np.array([[1, 0], [-1, 0]])
-        return self.__calculate_contact_jacobian_along_projections(state, projs)
+        return self.__calculate_contact_jacobian_along_projections(state, projs,model=model)
 
-    def get_N_matrix(self, state):
+    def get_N_matrix(self, state,model=None):
         """Calculate the normal contact jacobian of all vertices. Returns a
         numpy array of size (n_config, n_contacts) or (3, n_contacts) for each
         vertex's positive y-direction effect on the 3 generalized coordinates.
@@ -205,7 +279,7 @@ class TwoDimensionalPolytope:
 
         # Use projection in y-direction.
         proj = np.array([[0, 1]])
-        return self.__calculate_contact_jacobian_along_projections(state, proj)
+        return self.__calculate_contact_jacobian_along_projections(state, proj, model=model)
 
     def get_mu_matrix(self, _):
         """Calculate the friction matrix.  We assume this is not state
@@ -260,10 +334,10 @@ class TwoDimensionalPolytope:
 
         return -C @ v - G
 
-    def get_phi(self, state):
+    def get_phi(self, state,model=None):
         """Calculate the (n_contacts, 1) vector of interbody distances between
         each vertex and the ground."""
 
-        corners = self.get_vertex_locations_world(state)
+        corners,model = self.get_vertex_locations_world(state,model=model)
         return corners[:, 1].reshape(self.n_contacts, 1)
 

@@ -1,8 +1,13 @@
+from pyexpat import model
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
 import copy
 import timeit
+
+# Creating global variables for now
+from collections import defaultdict
+dec_vars    =   {'Count':0,'var':defaultdict(lambda: "NA")}
 
 def add_collocation_constr(model,x,u,N,poly_instance,timesteps,polytope):
     # TODO - Add collocation constraints, calls add_constraint_one_spline internally
@@ -27,9 +32,9 @@ def add_constraint_one_spline(model, x_i, u_i, x_ip1, u_ip1, poly_instance,dt,po
     u_mid =   {0: (u_ip1[0] + u_i[0])/2, 1: (u_ip1[1] + u_i[1])/2}
 
     s0    =   x_i 
-    s1    =   rollout_dynamics(poly_instance,x_i,u_i,polytope)
-    s2    =   (1/dt**2) * (3  *   (x_ip1 - x_i)  -  dt  * (2*rollout_dynamics(poly_instance,x_i,u_i,polytope) + rollout_dynamics(poly_instance,x_ip1,u_ip1,polytope) )   )
-    s3    =   (1/dt**3) * (2*(x_i - x_ip1) + dt * ( rollout_dynamics(poly_instance,x_i,u_i,polytope) + rollout_dynamics(poly_instance,x_ip1,u_ip1,polytope) ) )
+    s1    =   rollout_dynamics(model,poly_instance,x_i,u_i,polytope)
+    s2    =   (1/dt**2) * (3  *   (x_ip1 - x_i)  -  dt  * (2*rollout_dynamics(model,poly_instance,x_i,u_i,polytope) + rollout_dynamics(poly_instance,x_ip1,u_ip1,polytope) )   )
+    s3    =   (1/dt**3) * (2*(x_i - x_ip1) + dt * ( rollout_dynamics(model,poly_instance,x_i,u_i,polytope) + rollout_dynamics(poly_instance,x_ip1,u_ip1,polytope) ) )
 
     # returns the cubic spline
     def get_spline(s0,s1,s2,s3,dt):
@@ -44,21 +49,30 @@ def add_constraint_one_spline(model, x_i, u_i, x_ip1, u_ip1, poly_instance,dt,po
     model.addConstr(h_i ==  0.0)
 
 
-def rollout_dynamics(poly_instance,xi,ui,polytope):
+def rollout_dynamics(model,poly_instance,xi,ui,polytope):
     '''
     Returns x_{k+1} (where x{k+1} =   f(xk,uk)) 
     '''
     # Assuming that control can only be acted on one corner of cube (top left corner in this case)
     # TODO non-linearities currently not supported in Gurobi -- need to debug this 
-    control_loc                     =   polytope.get_vertex_locations_world(xi)[2, :]
+    control_loc,model               =   polytope.get_vertex_locations_world(xi,model=model)
+    control_loc                     =   control_loc[2,:]
     
-    theta                           =   state[4]
-    ang                             =   ui[1] + theta
-    control_mag                     =   ui[0]
+    theta                           =   xi[4]
 
-    control_vec                     =   control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-    poly_instance.set_initial_state(xi)
-    poly_instance.step_dynamics(control_vec, control_loc)
+    #Rolling out dynamics -- need to set more decision vars since there is a non-lin func of it
+    control_mag                     =   ui[0]
+    ang                             =   model.addVar()
+    cosine                          =   model.addVar(-1,1)
+    sine                            =   model.addVar(-1,1)
+    #Adding cosine and sine approximation 
+    model.addConstr(ang==ui[1] + theta)
+    model.addGenConstrCos(ang,cosine)
+    model.addGenConstrSin(ang,sine)
+
+    control_vec                     =   -np.array([control_mag*cosine,control_mag*sine])
+    poly_instance.set_initial_state(np.array(list(xi.values())))
+    poly_instance.step_dynamics(control_vec, control_loc,model=model)
 
     return poly_instance.state_history[-1]
 
@@ -89,7 +103,7 @@ def find_rolling_trajectory(N, init_state, final_state, tf, system,polytope):
     x               =   np.zeros((N,),dtype='object')
     u               =   np.zeros((N,),dtype='object')
     for i in range(N):
-        x[i]        =  model.addVars(init_state.shape[0],lb = [0.0]*init_state.shape[0],ub =[float('inf'),float('inf'),\
+        x[i]        =  model.addVars(init_state.shape[0],lb = [0.0]*init_state.shape[0],ub =[np.sqrt(2),float('inf'),\
                                 float('inf'),float('inf'),2*np.pi,float('inf')],name = "x_"+str(i))
 
         u[i]        =  model.addVars(2,lb = 0.0,ub =[float('inf'),np.pi],name = "u_"+str(i))

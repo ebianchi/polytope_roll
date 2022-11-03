@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, List, Optional
 import numpy as np
 import pdb
 import sympy
-
+import gurobipy as gp
 from toy_2d.src import solver_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 
@@ -58,7 +58,7 @@ class TwoDimensionalSystem:
             assert state_len - control_len == 1
 
     def __step_dynamics_no_ground_contact(self, state, control_force,
-                                          control_loc):
+                                          control_loc,model=None):
         """Do a dynamics step assuming no contact forces."""
 
         polytope = self.params.polytope
@@ -83,7 +83,7 @@ class TwoDimensionalSystem:
         M = polytope.get_M_matrix(state_for_M)
         k = polytope.get_k_vector(state_for_k)
         u = self.convert_input_to_generalized_coords(state, control_force,
-                                                     control_loc)
+                                                     control_loc,model=model)
         u = u.reshape((3, 1))
 
         v_next = v0 + np.linalg.inv(M) @ (k + u) * dt
@@ -97,7 +97,7 @@ class TwoDimensionalSystem:
                                q_next[2], v_next[2]])
         return next_state
 
-    def __get_simulation_terms(self, state, control_force, control_loc):
+    def __get_simulation_terms(self, state, control_force, control_loc,model=None):
         """Make one helper function to calculate all of the simulation-related
         terms of a system at the state."""
 
@@ -125,14 +125,14 @@ class TwoDimensionalSystem:
         k = polytope.get_k_vector(state_for_k)
 
         u = self.convert_input_to_generalized_coords(state, control_force,
-                                                     control_loc)
+                                                     control_loc,model=model)
         u = u.reshape((3, 1))
 
-        D = polytope.get_D_matrix(state)
-        N = polytope.get_N_matrix(state)
+        D = polytope.get_D_matrix(state,model=model)
+        N = polytope.get_N_matrix(state,model=model)
         E = polytope.get_E_matrix(state)
         Mu = polytope.get_mu_matrix(state)
-        phi = polytope.get_phi(state)
+        phi = polytope.get_phi(state,model=model)
 
         return M, D, N, E, Mu, k, u, q0, v0, phi
 
@@ -146,7 +146,7 @@ class TwoDimensionalSystem:
         self.state_history = state.reshape(1, 6)
         self.control_history = np.zeros((0, 4))
 
-    def step_dynamics(self, control_force, control_loc):
+    def step_dynamics(self, control_force, control_loc,model=None):
         """Given new control inputs, step the system forward in time, appending
         the next state and provided controls to the end of the state and control
         history arrays, respectively."""
@@ -156,14 +156,14 @@ class TwoDimensionalSystem:
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state = self.__step_dynamics(state, control_force, control_loc)
+        next_state = self.__step_dynamics(state, control_force, control_loc,model=model)
 
         # Set the state and control histories.
         control_entry = np.hstack((control_force, control_loc))
         self.state_history = np.vstack((self.state_history, next_state))
         self.control_history = np.vstack((self.control_history, control_entry))        
 
-    def __step_dynamics(self, state, control_force, control_loc):
+    def __step_dynamics(self, state, control_force, control_loc,model=None):
         """Given the current state, control_force (given as (2,) array for one
         control force), and control_loc (given as (2,) array for one location),
         simulate the system one timestep into the future.  This function
@@ -173,24 +173,37 @@ class TwoDimensionalSystem:
 
         polytope = self.params.polytope
         dt = self.params.dt
-
+        
+        '''
         # First, pretend no contact with the ground occurred.
         next_state = self.__step_dynamics_no_ground_contact(state,
                                                             control_force,
-                                                            control_loc)
-        if min(polytope.get_phi(next_state)) >= 0:
+                                                            control_loc,model=model)
+        if(model):
+            pos_dist        =   model.addVar(0)
+            model.addConstr(pos_dist == gp.min_(polytope.get_phi(next_state,model=model).flatten()))
+            
+            # To check if signed distance is positive
+            bin_var         =   model.addVar(vtype=gp.GRB.BINARY)
+            
+            if(pos_dist>=0)
+        if min(polytope.get_phi(next_state,model=model)) >= 0:
             return next_state
-
+        '''
         # At this point, we've established that contact forces are necessary.
         # Need to solve LCP to get proper contact forces -- construct terms.
         p, k_friction = polytope.n_contacts, polytope.n_friction
         M, D, N, E, Mu, k, u, q0, v0, phi = self.__get_simulation_terms(state,
-                                                    control_force, control_loc)
+                                                    control_force, control_loc,model=model)
         M_i = np.linalg.inv(M)
 
         # Formulating this inelastic frictional contact dynamics as an LCP is given
         # in Stewart and Trinkle 1996 (see Equation 29 for the structure of the
         # lcp_mat and lcp_vec).
+
+        '''
+        All this below are decision vars - Linexp of Gurobi
+        '''
         mat_top = np.hstack((D.T @ M_i @ D, D.T @ M_i @ N, E))
         mat_mid = np.hstack((N.T @ M_i @ D, N.T @ M_i @ N, np.zeros((p,p))))
         mat_bot = np.hstack((-E.T, Mu, np.zeros((p,p))))
@@ -220,7 +233,7 @@ class TwoDimensionalSystem:
         return next_state
 
     def convert_input_to_generalized_coords(self, state, control_force,
-                                              control_loc):
+                                              control_loc,model=None):
         """Convert an input force and location to forces in the generalized
         coordinates of the system, given its state."""
         x, y = state[0], state[2]
@@ -229,7 +242,17 @@ class TwoDimensionalSystem:
 
         lever_x = u_locx - x
         lever_y = u_locy - y
+        
+        if(model):
+            #Adding new variables, because Gurobi does not allow multiplication of its vars in order of 3
+            y_lever =   model.addVar(0,2)
+            x_lever =   model.addVar(0,2)
+            model.addConstr(y_lever ==   fy)
+            model.addConstr(x_lever ==   fx)
+            
+            torque = lever_x*y_lever - lever_y*x_lever
 
-        torque = lever_x*fy - lever_y*fx
+        else:
+            torque = lever_x*fy - lever_y*fx
 
         return np.array([fx, fy, torque])
