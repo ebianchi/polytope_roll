@@ -219,6 +219,10 @@ class TwoDimensionalSystem:
                                q_next[2], v_next[2]])
         return next_state
 
+    def get_linearized_discrete_dynamics(self, state, control_force, control_location):
+        """Given current state, control, get linearised dynamics matrix A,B"""
+        pass
+
     def convert_input_to_generalized_coords(self, state, control_force,
                                               control_loc):
         """Convert an input force and location to forces in the generalized
