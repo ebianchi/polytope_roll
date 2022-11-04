@@ -36,26 +36,41 @@ class TwoDimensionalSystem:
                             information, it is simple to get the controls in
                             generalized coordinates using the system's
                             convert_input_to_generalized_coords method.
+        force_history_n:    (T-1, p_contacts) array of the normal force history
+                            of the system, equivalent to Stewart and Trinkle Cn.
+        force_history_t:    (T-1, k_friction*p_contacts) array of the tangential
+                            force history of the system, equivalent to Stewart
+                            and Trinkle Beta.
     """
     params: TwoDimensionalSystemParams
 
     def __init__(self, params: TwoDimensionalSystemParams):
         self.params = params
 
+        # Get the number of contacts and friction cone directions from the
+        # system's polytope parameters.
+        p = self.params.polytope.n_contacts
+        k = self.params.polytope.n_friction
+
         # Initialize histories to be empty.
         self.state_history = np.zeros((0, 6))
         self.control_history = np.zeros((0, 4))
+        self.force_history_n = np.zeros((0, p))
+        self.force_history_t = np.zeros((0, p*k))
 
     def __check_consistent_histories(self):
         """Check that the history lengths are compatible."""
         state_len = self.state_history.shape[0]
         control_len = self.control_history.shape[0]
+        fn_len = self.force_history_n.shape[0]
+        ft_len = self.force_history_t.shape[0]
 
         if state_len == 0:
-            assert control_len == 0
+            assert control_len == fn_len == ft_len == 0
 
         else:
             assert state_len - control_len == 1
+            assert control_len == fn_len == ft_len
 
     def __step_dynamics_no_ground_contact(self, state, control_force,
                                           control_loc):
@@ -97,7 +112,7 @@ class TwoDimensionalSystem:
                                q_next[2], v_next[2]])
         return next_state
 
-    def __get_simulation_terms(self, state, control_force, control_loc):
+    def get_simulation_terms(self, state, control_force, control_loc):
         """Make one helper function to calculate all of the simulation-related
         terms of a system at the state."""
 
@@ -138,13 +153,20 @@ class TwoDimensionalSystem:
 
     def set_initial_state(self, state):
         """Set the initial state of the system.  This method will automatically
-        clear out the state and control histories of the system and set the
-        initial state to that provided as an argument."""
+        clear out the state, control, and contact force histories of the system
+        and set the initial state to that provided as an argument."""
+
+        # Get the number of contacts and friction cone directions from the
+        # system's polytope parameters.
+        p = self.params.polytope.n_contacts
+        k = self.params.polytope.n_friction
         
         # Clear out the histories, setting the first state_history entry to the
         # provided state.
         self.state_history = state.reshape(1, 6)
         self.control_history = np.zeros((0, 4))
+        self.force_history_n = np.zeros((0, p))
+        self.force_history_t = np.zeros((0, p*k))
 
     def step_dynamics(self, control_force, control_loc):
         """Given new control inputs, step the system forward in time, appending
@@ -156,12 +178,15 @@ class TwoDimensionalSystem:
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state = self.__step_dynamics(state, control_force, control_loc)
+        next_state, fn, ft = self.__step_dynamics(state, control_force,
+                                                  control_loc)
 
         # Set the state and control histories.
         control_entry = np.hstack((control_force, control_loc))
         self.state_history = np.vstack((self.state_history, next_state))
-        self.control_history = np.vstack((self.control_history, control_entry))        
+        self.control_history = np.vstack((self.control_history, control_entry))
+        self.force_history_n = np.vstack((self.force_history_n, fn))
+        self.force_history_t = np.vstack((self.force_history_t, ft))
 
     def __step_dynamics(self, state, control_force, control_loc):
         """Given the current state, control_force (given as (2,) array for one
@@ -169,22 +194,27 @@ class TwoDimensionalSystem:
         simulate the system one timestep into the future.  This function
         necessarily determines the ground reaction forces.  This function does
         NOT check that the provided control_force and control_loc are valid
-        (i.e. within friction cone and acting on the surface of the object)."""
+        (i.e. within friction cone and acting on the surface of the object).
+        Returns the next state and normal/tangential force vectors."""
 
         polytope = self.params.polytope
         dt = self.params.dt
+        p, k_friction = polytope.n_contacts, polytope.n_friction
 
         # First, pretend no contact with the ground occurred.
         next_state = self.__step_dynamics_no_ground_contact(state,
                                                             control_force,
                                                             control_loc)
+        # No contact occurred if the simulation features no vertices under the
+        # ground.
         if min(polytope.get_phi(next_state)) >= 0:
-            return next_state
+            fn = np.zeros((p,))
+            ft = np.zeros((p*k_friction,))
+            return next_state, fn, ft
 
         # At this point, we've established that contact forces are necessary.
         # Need to solve LCP to get proper contact forces -- construct terms.
-        p, k_friction = polytope.n_contacts, polytope.n_friction
-        M, D, N, E, Mu, k, u, q0, v0, phi = self.__get_simulation_terms(state,
+        M, D, N, E, Mu, k, u, q0, v0, phi = self.get_simulation_terms(state,
                                                     control_force, control_loc)
         M_i = np.linalg.inv(M)
 
@@ -217,7 +247,12 @@ class TwoDimensionalSystem:
         next_state = np.array([q_next[0], v_next[0], 
                                q_next[1], v_next[1],
                                q_next[2], v_next[2]])
-        return next_state
+
+        # Save the contact forces so we can return them with the next state.
+        fn = Cn.squeeze()
+        ft = Beta.squeeze()
+
+        return next_state, fn, ft
 
     def get_linearized_discrete_dynamics(self, state, control_force, control_location):
         """Given current state, control, get linearised dynamics matrix A,B"""

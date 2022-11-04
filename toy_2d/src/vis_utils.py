@@ -83,7 +83,6 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None):
     gif_file = f'{file_utils.OUT_DIR}/{gif_name}.gif'
     with imageio.get_writer(gif_file, mode='I') as writer:
         for filename in filenames:
-            filepath = f'/Users/bibit/Desktop/{filename}'
             image = imageio.imread(filename)
             writer.append_data(image)
     fps = 1./dt
