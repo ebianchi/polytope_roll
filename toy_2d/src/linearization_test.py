@@ -92,9 +92,10 @@ for _ in range(1250):
 
     # -> Get the solved contact forces from the true system.
     cn, beta = system.force_history_n[-1, :], system.force_history_t[-1, :]
+    zeta = np.zeros_like(cn)
 
     # -> Do the nonlinear LCS simulation step and store the results.
-    next_state_nllcs = f1 + f2 @ np.hstack((beta, cn))
+    next_state_nllcs = f1 + f2 @ np.hstack((beta, cn, zeta))
     next_state_from_nllcs = lcs._convert_lcs_state_to_system_state(
                                                             next_state_nllcs)
     states_from_nllcs = np.vstack((states_from_nllcs,
@@ -112,12 +113,9 @@ for _ in range(1250):
 
     # -> Save the LCS simulation results.
     next_state_lcs = lcs.state_history[-1, :]
-    next_output_lcs = lcs.output_history[-1, :]
     next_state_from_lcs = lcs._convert_lcs_state_to_system_state(next_state_lcs)
     states_from_lcs = np.vstack((states_from_lcs,
                                  next_state_from_lcs.reshape(1,6)))
-    outputs_from_lcs = np.vstack((outputs_from_lcs,
-                                  next_output_lcs.reshape(1,12)))
 
 # Compare the outputs from the 3 methods, against the "true" system dynamics.
 states_from_sys = system.state_history
