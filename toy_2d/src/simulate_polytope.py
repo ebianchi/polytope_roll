@@ -28,7 +28,7 @@ MOM_INERTIA = 0.01
 MU_GROUND = 0.3
 
 # Control properties
-MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
+MU_CONTROL = 1.0    # Currently, this isn't being used.  The ambition is for
                     # this to help define a set of feasible control forces.
 
 # Simulation parameters.
@@ -36,8 +36,8 @@ DT = 0.002          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-# x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
-x0 = np.array([0, 0, 1.0, 0, 0, 0])
+x0 = np.array([0, 0, 1.5, 0, 0, 0])
+# x0 = np.array([0, 0, 1.0, 0, -1/6 * np.pi, 0])
 states = x0.reshape(1, 6)
 
 
@@ -71,8 +71,9 @@ for _ in range(1250):
     # Apply the force at a fixed angle relative to the polytope.
     theta = state[4]
     ang = np.pi + theta
-    control_mag = 0.0
+    control_mag = 0.1
     control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+    # control_vec = control_mag * np.array([-0.5, 0])
 
     system.step_dynamics(control_vec, control_loc)
 
@@ -81,7 +82,7 @@ states = system.state_history
 controls = system.control_history
 control_forces, control_locs = controls[:, :2], controls[:, 2:]
 
-pdb.set_trace()
+# pdb.set_trace()
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,

@@ -211,6 +211,7 @@ class TwoDimensionalSystem:
             fn = np.zeros((p,))
             ft = np.zeros((p*k_friction,))
             return next_state, fn, ft
+        
 
         # At this point, we've established that contact forces are necessary.
         # Need to solve LCP to get proper contact forces -- construct terms.

@@ -7,7 +7,7 @@ setup(
                + f'optimization and controls.',
    author='Bibit Bianchini',
    author_email='bibit@seas.upenn.edu',
-   packages=['polytope_roll'],
+   packages=['/home/divyanshu/Desktop/MEAM517/push/polytope_roll'],
    install_requires=[
       'gurobipy',
       'imageio',

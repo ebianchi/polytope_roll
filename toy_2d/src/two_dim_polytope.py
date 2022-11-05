@@ -76,6 +76,7 @@ class TwoDimensionalPolytope:
         for i in range(p):
             corner_body = self.params.vertex_locations[i, :]
 
+
             phi = np.arctan2(corner_body[1], corner_body[0])
             radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
 
