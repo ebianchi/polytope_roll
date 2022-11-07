@@ -83,7 +83,7 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 pdb.set_trace()
 
 # Generate a gif of the simulated rollout.
-vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
+vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
     controls=(control_forces, control_locs))
 
 
