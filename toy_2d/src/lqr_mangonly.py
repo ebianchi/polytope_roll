@@ -232,6 +232,41 @@ class iLQR():
         next_state = system.state_history[-1,:]
         return next_state
 
+    def animate(self, init_state, controls, show_vis=False):
+        # Rollout with a fixed (body-frame) force at one of the vertices.
+        x = init_state
+        uu = controls
+        system.set_initial_state(x)
+        for o in range(len(uu)):
+            state = system.state_history[-1, :]
+
+            # Find the third vertex location.
+            control_loc = polytope.get_vertex_locations_world(state)[2, :]
+
+            # Apply the force at a fixed angle relative to the polytope.
+            theta = state[4]
+            if(o==len(uu)-1):
+                print(state)
+            ang = np.pi + theta
+            control_mag = uu[o]
+            control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+            # control_vec = uu[o]
+            # control_vec = control_mag * np.array([-0.5, 0])
+
+            system.step_dynamics(control_vec, control_loc)
+
+        # Collect the state and control histories.
+        states = system.state_history
+        controls = system.control_history
+        control_forces, control_locs = controls[:, :2], controls[:, 2:]
+
+        # pdb.set_trace()
+
+        # Generate a gif of the simulated rollout.
+        if(show_vis):
+            vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
+                controls=(control_forces, control_locs))     
+
     def calculate_optimal_trajectory(self, x, uu_guess) :
 
         """
@@ -266,41 +301,13 @@ class iLQR():
 
             Jprev = Jnext
             Jnext = self.total_cost(xx, uu)
-            print(f'cost: {Jnext}')
             i += 1
-            if(i%10==0 and i >1):
-                # Rollout with a fixed (body-frame) force at one of the vertices.
-                system.set_initial_state(x)
-                for o in range(len(uu)):
-                    state = system.state_history[-1, :]
-
-                    # Find the third vertex location.
-                    control_loc = polytope.get_vertex_locations_world(state)[2, :]
-
-                    # Apply the force at a fixed angle relative to the polytope.
-                    theta = state[4]
-                    if(o==len(uu)-1):
-                        print(theta)
-                    ang = np.pi + theta
-                    control_mag = uu[o]
-                    control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-                    # control_vec = uu[o]
-                    # control_vec = control_mag * np.array([-0.5, 0])
-
-                    system.step_dynamics(control_vec, control_loc)
-
-                # Collect the state and control histories.
-                states = system.state_history
-                controls = system.control_history
-                control_forces, control_locs = controls[:, :2], controls[:, 2:]
-
-                # pdb.set_trace()
-
-                # Generate a gif of the simulated rollout.
-                vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
-                    controls=(control_forces, control_locs))
+            if(i%20==0 and i >1):
+                print(f'cost: {Jnext}')
+                self.animate(x, uu, show_vis=True)
 
         print(f'Converged to cost {Jnext}')
+        self.animate(x, uu, show_vis=True)
         return xx, uu, KK
 
 
@@ -313,15 +320,15 @@ RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 
 # Polytope properties
 MASS = 1
-MOM_INERTIA = 0.01
-MU_GROUND = 0.8
+MOM_INERTIA = 0.1
+MU_GROUND = 1e6
 
 # Control properties
 MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
                     # this to help define a set of feasible control forces.
 
 # Simulation parameters.
-DT = 0.002          # If a generated trajectory looks messed up, it could be
+DT = 0.001          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
@@ -355,16 +362,24 @@ lcs = TwoDSystemLCSApproximation(system)
 #non-linear but defining a quadratic cost makes life easier
 # x0 = np.array([0, 0, 1.4, 0, -1/8 * np.pi, 0])
 x0 = np.array([0, 0, 1.0, 0, 0, 0])
-x_goal = np.array([0, 0, 1.0, 0, -np.pi/2, 0])
+x_goal = np.array([2.0, 0, 1.0, 0, -np.pi/2, 0])
 Q = np.eye(6)
+Q[1,1]=0
+Q[3,3]=0
+Q[5,5]=0
+Q[0,0]=0
+Qf = np.eye(6)*10
+# Qf[1,1]=0
+# Qf[3,3]=0
+# Qf[5,5]=0
 R = np.eye(1)*0.05
 # R = np.zeros((2,2))
 
 N = 1250
-u_guess = np.zeros((N-1,1))
+u_guess = np.ones((N-1,1))*5
 # print(len(u_guess))
 
-obj = iLQR(x0, x_goal, N, DT, Q, R, Q)
+obj = iLQR(x0, x_goal, N, DT, Q, R, Qf)
 obj.calculate_optimal_trajectory(x0, u_guess)
 
 # Rollout with a fixed (body-frame) force at one of the vertices.

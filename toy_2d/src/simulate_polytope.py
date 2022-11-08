@@ -24,20 +24,21 @@ RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 
 # Polytope properties
 MASS = 1
-MOM_INERTIA = 0.01
-MU_GROUND = 0.3
+MOM_INERTIA = 0.1
+MU_GROUND = 1e3
+# MU_GROUND = 0.3
 
 # Control properties
 MU_CONTROL = 1.0    # Currently, this isn't being used.  The ambition is for
                     # this to help define a set of feasible control forces.
 
 # Simulation parameters.
-DT = 0.002          # If a generated trajectory looks messed up, it could be
+DT = 0.001          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-x0 = np.array([0, 0, 1.5, 0, 0, 0])
-# x0 = np.array([0, 0, 1.0, 0, -1/6 * np.pi, 0])
+x0 = np.array([0, 0, 1, 0, 0, 0])
+# x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
 states = x0.reshape(1, 6)
 
 
@@ -62,7 +63,7 @@ system = TwoDimensionalSystem(system_params)
 
 # Rollout with a fixed (body-frame) force at one of the vertices.
 system.set_initial_state(x0)
-for _ in range(1250):
+for _ in range(5000):
     state = system.state_history[-1, :]
 
     # Find the third vertex location.
@@ -71,7 +72,7 @@ for _ in range(1250):
     # Apply the force at a fixed angle relative to the polytope.
     theta = state[4]
     ang = np.pi + theta
-    control_mag = 0.1
+    control_mag = 5
     control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
     # control_vec = control_mag * np.array([-0.5, 0])
 
