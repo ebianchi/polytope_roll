@@ -12,7 +12,8 @@ from toy_2d.src.two_dim_system import TwoDimensionalSystem
 class TwoDSystemLCSApproximation:
     """A Linear Complementarity System (LCS) approximation for a two dimensional
     system consisting of a flat ground and a 2D polytope.  This object is
-    capable of simulation approximation about preselected (x^*, u^*) points.
+    capable of simulation approximation about preselected (x^*, u^*) state and
+    generalized coordinate input points.
 
     From the nonlinear notation:
 
@@ -44,7 +45,7 @@ class TwoDSystemLCSApproximation:
                                 history of the system, stored as [fx, fy, locx,
                                 locy].  This form can be converted into
                                 generalized coordinates using the method in
-                                self.system.convert_input_to_generalized_coords.
+                                self.convert_input_to_generalized_coords.
         lambda_history:         (T-1, p_contacts * (k_friction+2)) array of the
                                 full lambda vector in the LCP M*lambda + q >= 0.
                                 This will help us compare these "real" dynamics
@@ -71,29 +72,31 @@ class TwoDSystemLCSApproximation:
 
         # Initialize histories to be empty.
         self.state_history = np.zeros((0, 6))
-        self.control_history = np.zeros((0, 4))
+        self.full_control_history = np.zeros((0, 4))
         self.lambda_history = np.zeros((0, p*(k+2)))
         self.output_history = np.zeros((0, p*(k+2)))
 
         # Initialize the linearization point to be empty.
-        self.linearization_point = {'q': None, 'v': None,
-                                    'u_force': None, 'u_loc': None}
+        self.linearization_point = {'q': None, 'v': None, 'controls': None}
 
-    def set_linearization_point(self, q, v, u_force, u_loc):
+    def set_linearization_point(self, q, v, controls):
         """Set the linear approximation's point of linearization.  Note that
         this method will not will not do anything with the stored histories."""
 
-        q, v = q.squeeze(), v.squeeze()
-        u_force, u_loc = u_force.squeeze(), u_loc.squeeze()
+        q, v, controls = q.squeeze(), v.squeeze(), controls.squeeze()
 
-        assert q.shape == (3,) and v.shape == (3,)
-        assert u_force.shape == (2,) and u_loc.shape == (2,)
+        assert q.shape == v.shape == (3,)
+
+        # No need to check the shape of the controls since it could be any shape
+        # as long as it matches the underlying self.system's control
+        # representation.  Just make sure we didn't compress a (1,) array to ().
+        if controls.shape == ():
+            controls = controls.reshape(1)
         
         # Store the linearization point.
         self.linearization_point['q'] = q
         self.linearization_point['v'] = v
-        self.linearization_point['u_force'] = u_force
-        self.linearization_point['u_loc'] = u_loc
+        self.linearization_point['controls'] = controls
 
     def _get_f_1(self, x, u):
         """From the nonlinear notation, evaluate the value of f_1 (of shape
@@ -259,7 +262,7 @@ class TwoDSystemLCSApproximation:
 
         return dt * mat_1 @ M_inv
 
-    def _get_df3_dx(self, x, u):
+    def _get_df3_dx(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f3
         with respect to the state at the provided state and control input,
         yielding a jacobian of shape (p*(k+2),6).  Again, the state is expected
@@ -366,8 +369,16 @@ class TwoDSystemLCSApproximation:
         H = self.get_H_matrix()
         J = self.get_J_matrix()
         l = self.get_l_vector()
+        P = self.get_P_matrix()
 
-        return A, B, C, d, G, H, J, l
+        return A, B, C, d, G, H, J, l, P
+
+    def convert_input_to_generalized_coords(self, x, controls):
+        """Convert an input set of controls (in whatever format is used by the
+        underlying self.system) to forces in the generalized coordinates of the
+        system, given its state."""
+
+        return self.system.convert_input_to_generalized_coords(x, controls)
 
     def get_A_matrix(self):
         """Calculate the A matrix in the LCS approximation.  The linearization
@@ -378,11 +389,11 @@ class TwoDSystemLCSApproximation:
         # linearization.
         v, q = self.linearization_point['v'], self.linearization_point['q']
         x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
 
-        control_force = self.linearization_point['u_force']
-        control_loc = self.linearization_point['u_loc']
-        u = self.system.convert_input_to_generalized_coords(x, control_force,
-                                                            control_loc)
+        # Convert the controls to generalized coordinates using the P map.
+        P = self.get_P_matrix()
+        u = P @ controls
 
         # Build the expression via a call to df1_dx.
         return self._get_df1_dx(x, u)
@@ -396,11 +407,11 @@ class TwoDSystemLCSApproximation:
         # linearization.
         v, q = self.linearization_point['v'], self.linearization_point['q']
         x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
 
-        control_force = self.linearization_point['u_force']
-        control_loc = self.linearization_point['u_loc']
-        u = self.system.convert_input_to_generalized_coords(x, control_force,
-                                                            control_loc)
+        # Convert the controls to generalized coordinates using the P map.
+        P = self.get_P_matrix()
+        u = P @ controls
 
         # Build the expression via a call to df1_du.
         return self._get_df1_du(x, u)
@@ -425,11 +436,11 @@ class TwoDSystemLCSApproximation:
         # linearization.
         v, q = self.linearization_point['v'], self.linearization_point['q']
         x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
 
-        control_force = self.linearization_point['u_force']
-        control_loc = self.linearization_point['u_loc']
-        u = self.system.convert_input_to_generalized_coords(x, control_force,
-                                                            control_loc)
+        # Convert the controls to generalized coordinates using the P map.
+        P = self.get_P_matrix()
+        u = P @ controls
 
         # Build the expression.
         f1_val = self._get_f_1(x, u)
@@ -447,11 +458,11 @@ class TwoDSystemLCSApproximation:
         # linearization.
         v, q = self.linearization_point['v'], self.linearization_point['q']
         x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
 
-        control_force = self.linearization_point['u_force']
-        control_loc = self.linearization_point['u_loc']
-        u = self.system.convert_input_to_generalized_coords(x, control_force,
-                                                            control_loc)
+        # Convert the controls to generalized coordinates using the P map.
+        P = self.get_P_matrix()
+        u = P @ controls
 
         # Build the expression via a call to df3_dx.
         return self._get_df3_dx(x, u)
@@ -465,11 +476,11 @@ class TwoDSystemLCSApproximation:
         # linearization.
         v, q = self.linearization_point['v'], self.linearization_point['q']
         x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
 
-        control_force = self.linearization_point['u_force']
-        control_loc = self.linearization_point['u_loc']
-        u = self.system.convert_input_to_generalized_coords(x, control_force,
-                                                            control_loc)
+        # Convert the controls to generalized coordinates using the P map.
+        P = self.get_P_matrix()
+        u = P @ controls
 
         # Build the expression via a call to df3_du.
         return self._get_df3_du(x, u)
@@ -494,11 +505,11 @@ class TwoDSystemLCSApproximation:
         # linearization.
         v, q = self.linearization_point['v'], self.linearization_point['q']
         x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
 
-        control_force = self.linearization_point['u_force']
-        control_loc = self.linearization_point['u_loc']
-        u = self.system.convert_input_to_generalized_coords(x, control_force,
-                                                            control_loc)
+        # Convert the controls to generalized coordinates using the P map.
+        P = self.get_P_matrix()
+        u = P @ controls
 
         # Build the expression.
         f3_val = self._get_f_3(x, u)
@@ -507,10 +518,26 @@ class TwoDSystemLCSApproximation:
 
         return f3_val - df3_dx_val @ x - df3_du_val @ u
 
+    def get_P_matrix(self):
+        """Wrapper around the self.system's method calculating the linearized
+        map from the native controls representation to generalized coordinates,
+        self.get_map_from_controls_to_gen_coordinates(), using the system state
+        and controls set as the linearization point."""
+
+        # This requires using the state and control input stored in the
+        # linearization.
+        v, q = self.linearization_point['v'], self.linearization_point['q']
+        x = np.hstack((v, q))
+        controls = self.linearization_point['controls']
+
+        state_sys = self._convert_lcs_state_to_system_state(x)
+        return self.system.get_map_from_controls_to_gen_coordinates(state_sys,
+                                                                    controls)
+
     def __check_consistent_histories(self):
         """Check that the history lengths are compatible."""
         state_len = self.state_history.shape[0]
-        control_len = self.control_history.shape[0]
+        control_len = self.full_control_history.shape[0]
         lam_len = self.lambda_history.shape[0]
         out_len = self.output_history.shape[0]
 
@@ -534,11 +561,11 @@ class TwoDSystemLCSApproximation:
         # Clear out the histories, setting the first state_history entry to the
         # provided state.
         self.state_history = state.reshape(1, 6)
-        self.control_history = np.zeros((0, 4))
+        self.full_control_history = np.zeros((0, 4))
         self.lambda_history = np.zeros((0, p*(k+2)))
         self.output_history = np.zeros((0, p*(k+2)))
 
-    def step_lcs_dynamics(self, control_force, control_loc, lam):
+    def step_lcs_dynamics(self, controls, lamda_k):
         """Given new control inputs and contact forces, step the system forward
         in time, appending the next state, provided controls, and provided
         contact forces to the end of the state and control history arrays,
@@ -549,36 +576,38 @@ class TwoDSystemLCSApproximation:
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state, yk = self.__step_lcs_dynamics(state, control_force,
-                                                  control_loc, lam)
+        next_state, yk = self.__step_lcs_dynamics(state, controls, lamda_k)
+
+        # Convert the controls to full controls.
+        full_control = self.system.get_full_controls(state, controls)
 
         # Set the state and control histories.
-        control_entry = np.hstack((control_force, control_loc))
         self.state_history = np.vstack((self.state_history, next_state))
-        self.control_history = np.vstack((self.control_history, control_entry))
-        self.lambda_history = np.vstack((self.lambda_history, lam))
+        self.full_control_history = np.vstack((self.full_control_history,
+                                               full_control))
+        self.lambda_history = np.vstack((self.lambda_history, lamda_k))
         self.output_history = np.vstack((self.output_history, yk))
 
-    def __step_lcs_dynamics(self, state, control_force, control_loc, lambda_k):
-        """Given the current state, control_force (given as (2,) array for one
-        control force), control_loc (given as (2,) array for one location),
-        normal contact forces cn (given as (p,) array), and tangential contact
-        forces beta (given as (p*k,) array), simulate the LCS approximation one
-        timestep into the future.  This function uses the linearization point
-        that is assumed to be already set via self.set_linearization_point().
-        This function does NOT check that the provided control_force and
-        control_loc are valid (i.e. within friction cone and acting on the
+    def __step_lcs_dynamics(self, state, controls, lambda_k):
+        """Given the current state, controls (expressed how the base system
+        expresses controls, such as but not necessarily a (4,) array for
+        [force_x, force_y, world_loc_x, world_loc_y]), and complementarity
+        vector lambda_k (given as (p*(k+2),) array), simulate the LCS
+        approximation one time step into the future.  This function uses the
+        linearization point that is assumed to be already set via
+        self.set_linearization_point().  This function does NOT check that the
+        provided controls are valid (i.e. within friction cone and acting on the
         surface of the object).  Returns the next state."""
 
         # Get all the LCS terms.
-        A, B, C, d, G, H, J, l = self.get_lcs_terms()
-        x = state
+        A, B, C, d, G, H, J, l, P = self.get_lcs_terms()
 
-        # Convert the control force and location to generalized coordinates.
-        state_sys = self._convert_lcs_state_to_system_state(state)
-        u = self.system.convert_input_to_generalized_coords(state_sys,
-                                                    control_force, control_loc)
-        u = u.squeeze()
+        # # Convert the control force and location to generalized coordinates.
+        # state_sys = self._convert_lcs_state_to_system_state(state)
+        # u = self.convert_input_to_generalized_coords(state_sys, controls)
+        # P = self.get_P_matrix(state, controls)
+        x = state
+        u = P @ controls
 
         # Evaluate the expressions for x_{k+1} and y_k.
         x_k1 = A@x + B@u + C@lambda_k + d
