@@ -84,7 +84,7 @@ pdb.set_trace()
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
-    controls=(control_forces, control_locs))
+    controls=(control_forces, control_locs), save=False)
 
 
 
