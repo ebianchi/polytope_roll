@@ -72,8 +72,9 @@ for _ in range(1250):
     ang = np.pi + theta
     control_mag = 0.3
     control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+    control = np.hstack((control_vec, control_loc))
 
-    system.step_dynamics(control_vec, control_loc)
+    system.step_dynamics(control)
 
 # Collect the state and control histories.
 states = system.state_history

@@ -79,8 +79,7 @@ class TwoDimensionalSystem:
             assert state_len - control_len == 1
             assert control_len == lam_len == out_len
 
-    def __step_dynamics_no_ground_contact(self, state, control_force,
-                                          control_loc):
+    def __step_dynamics_no_ground_contact(self, state, controls):
         """Do a dynamics step assuming no contact forces."""
 
         polytope = self.params.polytope
@@ -104,8 +103,7 @@ class TwoDimensionalSystem:
         # Do a forward simulation as if forces were zero (no LCP required).
         M = polytope.get_M_matrix(state_for_M)
         k = polytope.get_k_vector(state_for_k)
-        u = self.convert_input_to_generalized_coords(state, control_force,
-                                                     control_loc)
+        u = self.convert_input_to_generalized_coords(state, controls)
         u = u.reshape((3, 1))
 
         v_next = v0 + np.linalg.inv(M) @ (k + u) * dt
@@ -119,7 +117,7 @@ class TwoDimensionalSystem:
                                q_next[2], v_next[2]])
         return next_state
 
-    def get_simulation_terms(self, state, control_force, control_loc):
+    def get_simulation_terms(self, state, controls):
         """Make one helper function to calculate all of the simulation-related
         terms of a system at the state."""
 
@@ -146,8 +144,7 @@ class TwoDimensionalSystem:
         M = polytope.get_M_matrix(state_for_M)
         k = polytope.get_k_vector(state_for_k)
 
-        u = self.convert_input_to_generalized_coords(state, control_force,
-                                                     control_loc)
+        u = self.convert_input_to_generalized_coords(state, controls)
         u = u.reshape((3, 1))
 
         D = polytope.get_D_matrix(state)
@@ -175,7 +172,7 @@ class TwoDimensionalSystem:
         self.lambda_history = np.zeros((0, p*(k+2)))
         self.output_history = np.zeros((0, p*(k+2)))
 
-    def step_dynamics(self, control_force, control_loc):
+    def step_dynamics(self, controls):
         """Given new control inputs, step the system forward in time, appending
         the next state and provided controls to the end of the state and control
         history arrays, respectively."""
@@ -185,25 +182,22 @@ class TwoDimensionalSystem:
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state, lam, out = self.__step_dynamics(state, control_force,
-                                                    control_loc)
+        next_state, lam, out = self.__step_dynamics(state, controls)
 
         # Set the state and control histories.
-        control_entry = np.hstack((control_force, control_loc))
         self.state_history = np.vstack((self.state_history, next_state))
-        self.control_history = np.vstack((self.control_history, control_entry))
+        self.control_history = np.vstack((self.control_history, controls))
         self.lambda_history = np.vstack((self.lambda_history, lam))
         self.output_history = np.vstack((self.output_history, out))
 
-    def __step_dynamics(self, state, control_force, control_loc):
-        """Given the current state, control_force (given as (2,) array for one
-        control force), and control_loc (given as (2,) array for one location),
-        simulate the system one timestep into the future.  This function
-        necessarily determines the ground reaction forces.  This function does
-        NOT check that the provided control_force and control_loc are valid
-        (i.e. within friction cone and acting on the surface of the object).
-        Returns the next state, complementarity lambda vector, and the LCP
-        output vector."""
+    def __step_dynamics(self, state, controls):
+        """Given the current state and controls (given as (4,) array for
+        [force_x, force_y, world_loc_x, world_loc_y]), simulate the system one
+        timestep into the future.  This function necessarily determines the
+        ground reaction forces.  This function does NOT check that the provided
+        control_force and control_loc are valid (i.e. within friction cone and
+        acting on the surface of the object).  Returns the next state,
+        complementarity lambda vector, and the LCP output vector."""
 
         polytope = self.params.polytope
         dt = self.params.dt
@@ -211,7 +205,7 @@ class TwoDimensionalSystem:
 
         # Construct LCP terms.
         M, D, N, E, Mu, k, u, q0, v0, phi = self.get_simulation_terms(state,
-                                                    control_force, control_loc)
+                                                    controls)
         M_i = np.linalg.inv(M)
 
         # Formulating this inelastic frictional contact dynamics as an LCP is
@@ -250,11 +244,17 @@ class TwoDimensionalSystem:
 
         return next_state, lam, output
 
-    def convert_input_to_generalized_coords(self, state, control_force,
-                                              control_loc):
+    def convert_input_to_generalized_coords(self, state, controls):
         """Convert an input force and location to forces in the generalized
-        coordinates of the system, given its state."""
+        coordinates of the system, given its state.  Assumes the controls are
+        given as [fx, fy, loc_x, loc_y]."""
+
+        controls = controls.squeeze()
+        assert controls.shape == (4,)
+
         x, y = state[0], state[2]
+
+        control_force, control_loc = controls[:2], controls[2:]
         fx, fy = control_force[0], control_force[1]
         u_locx, u_locy = control_loc[0], control_loc[1]
 
