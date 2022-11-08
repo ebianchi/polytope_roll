@@ -74,9 +74,9 @@ for _ in range(5000):
     ang = np.pi + theta
     control_mag = 5
     control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-    # control_vec = control_mag * np.array([-0.5, 0])
+    control = np.hstack((control_vec, control_loc))
 
-    system.step_dynamics(control_vec, control_loc)
+    system.step_dynamics(control)
 
 # Collect the state and control histories.
 states = system.state_history
@@ -86,8 +86,8 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 # pdb.set_trace()
 
 # Generate a gif of the simulated rollout.
-vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
-    controls=(control_forces, control_locs))
+vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
+    controls=(control_forces, control_locs), save=False)
 
 
 

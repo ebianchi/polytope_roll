@@ -45,15 +45,19 @@ class TwoDSystemLCSApproximation:
                                 locy].  This form can be converted into
                                 generalized coordinates using the method in
                                 self.system.convert_input_to_generalized_coords.
-        force_history_n:        (T-1, p_contacts) array of the normal force
-                                history of the system, equivalent to Stewart and
-                                Trinkle Cn.
-        force_history_t:        (T-1, k_friction*p_contacts) array of the
-                                tangential force history of the system,
-                                equivalent to Stewart and Trinkle Beta.
-        output_history:         (T-1, k_friction*p_contacts) array of the y_k
-                                complementarity vectors corresponding to the
-                                simulation history.
+        lambda_history:         (T-1, p_contacts * (k_friction+2)) array of the
+                                full lambda vector in the LCP M*lambda + q >= 0.
+                                This will help us compare these "real" dynamics
+                                with linearization approximations later.  Note
+                                that the array[:, :p_contacts*k_friction] gives
+                                the history of tangential forces, Beta from
+                                Stewart and Trinkle, and array[:, p*k:p*(k+1)]
+                                gives the history of normal forces, Cn from
+                                Stewart and Trinkle.
+        output_history:         (T-1, p_contacts * (k_friction+2)) array of the
+                                full z vector in the LCP M*lambda + q = z.  This
+                                will help us compare these "real" dynamics with
+                                linearization approximations later.
     """
     system: TwoDimensionalSystem
 
@@ -68,9 +72,8 @@ class TwoDSystemLCSApproximation:
         # Initialize histories to be empty.
         self.state_history = np.zeros((0, 6))
         self.control_history = np.zeros((0, 4))
-        self.force_history_n = np.zeros((0, p))
-        self.force_history_t = np.zeros((0, p*k))
-        self.output_history = np.zeros((0, p*(k+1)))
+        self.lambda_history = np.zeros((0, p*(k+2)))
+        self.output_history = np.zeros((0, p*(k+2)))
 
         # Initialize the linearization point to be empty.
         self.linearization_point = {'q': None, 'v': None,
@@ -120,7 +123,7 @@ class TwoDSystemLCSApproximation:
 
     def _get_f_2(self, x):
         """From the nonlinear notation, evaluate the value of f_2 (of shape
-        (6, p*(k+1))) at the provided. Note that the x is expected to be in the
+        (6, p*(k+2))) at the provided. Note that the x is expected to be in the
         LCS order [vx, vy, vth, x, y, th]."""
         
         # Get some necessary values from inside the system.
@@ -141,13 +144,13 @@ class TwoDSystemLCSApproximation:
 
         # Build the expression.
         mat_1 = np.vstack((np.eye(n), dt*np.eye(n)))
-        mat_2 = np.hstack((D, N))
+        mat_2 = np.hstack((D, N, np.zeros((n,p))))
 
         return mat_1 @ M_inv @ mat_2
 
     def _get_f_3(self, x, u):
         """From the nonlinear notation, evaluate the value of f_3 (of shape
-        (p*(k+1), 1)) at the provided x and u.  Note that the x is expected to
+        (p*(k+2), 1)) at the provided x and u.  Note that the x is expected to
         be in the LCS order [vx, vy, vth, x, y, th] and the control input is
         expected to be in generalized coordinates [fx, fy, tau]."""
         
@@ -163,7 +166,6 @@ class TwoDSystemLCSApproximation:
 
         # Will need the state vector in system form.
         state_sys = self._convert_lcs_state_to_system_state(x)
-        y, theta = state_sys[2], state_sys[4]
 
         # Need the mass matrix, contact jacobians, and continuous forces.
         M = polytope.get_M_matrix(state_sys)
@@ -173,31 +175,51 @@ class TwoDSystemLCSApproximation:
         k = polytope.get_k_vector(state_sys).reshape(3,)
 
         # Build the expression.
-        P_2 = np.hstack((np.zeros((p,1)), np.ones((p,1)), np.zeros((p,n+1))))
-        P_3 = np.hstack((np.zeros((p,2)), np.ones((p,1)), np.zeros((p,n))))
+        P_5 = np.hstack((np.zeros((p,n+1)), np.ones((p,1)), np.zeros((p,1))))
+        P_6 = np.hstack((np.zeros((p,n+2)), np.ones((p,1))))
 
-        mat_1 = np.vstack((D.T, N.T))
-        mat_2 = np.hstack((np.zeros((n,n)), np.eye(n)))
-        mat_3 = np.vstack((np.zeros((p*k_friction, 2*n)), P_2))
-        mat_4 = np.vstack((np.zeros((p*k_friction, p)), np.eye(p)))
+        mat_1 = np.vstack((D.T, N.T, np.zeros((p,n))))
+        mat_2 = np.hstack((np.eye(n), np.zeros((n,n))))
+        mat_3 = np.vstack((np.zeros((p*k_friction,2*n)), P_5,
+                           np.zeros((p,2*n))))
+        mat_4 = np.vstack((np.zeros((p*k_friction, p)), np.eye(p),
+                           np.zeros((p,p))))
 
         diag_r = np.diag(radii)
 
-        sin_vec = np.sin(P_3 @ x + angles)
+        sin_vec = np.sin(P_6 @ x + angles)
         
         return mat_1 @ (mat_2@x + dt*M_inv@(k+u)) + (1/dt) * mat_3@x + \
                (1/dt) * mat_4@diag_r@sin_vec
 
-    def _get_f_4(self, _x):
+    def _get_f_4(self, x):
         """From the nonlinear notation, evaluate the value of f_4 (of shape
-        (p*(k+1), p*(k+1))) at the provided x.  Note that the x is expected to
+        (p*(k+2), p*(k+2))) at the provided x.  Note that the x is expected to
         be in the LCS order [vx, vy, vth, x, y, th]."""
         
-        # It turns out that f_4(x_k) is all zeros.  Return all zeros in the
-        # right shape.
-        p = self.system.params.polytope.n_contacts
-        k_friction = self.system.params.polytope.n_friction
-        return np.zeros((p*(k_friction+1), p*(k_friction+1)))
+        # Get some necessary values from inside the system.
+        polytope = self.system.params.polytope
+        p = polytope.n_contacts
+
+        # Will need the state vector in system form.
+        state_sys = self._convert_lcs_state_to_system_state(x)
+
+        # Need the mass matrix, contact jacobians, E matrix, and friction.
+        M = polytope.get_M_matrix(state_sys)
+        M_inv = np.linalg.inv(M)
+        D = polytope.get_D_matrix(state_sys)
+        N = polytope.get_N_matrix(state_sys)
+        E = polytope.get_E_matrix(state_sys)
+        Mu = polytope.get_mu_matrix(state_sys)
+        
+        # Build the expression.
+        mat_top = np.hstack((D.T @ M_inv @ D, D.T @ M_inv @ N, E))
+        mat_mid = np.hstack((N.T @ M_inv @ D, N.T @ M_inv @ N, np.zeros((p,p))))
+        mat_bot = np.hstack((-E.T, Mu, np.zeros((p,p))))
+
+        lcp_mat = np.vstack((mat_top, mat_mid, mat_bot))
+
+        return lcp_mat
 
     def _get_df1_dx(self, _x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f1
@@ -240,7 +262,7 @@ class TwoDSystemLCSApproximation:
     def _get_df3_dx(self, x, u):
         """From the nonlinear notation, evaluate the partial derivative of f3
         with respect to the state at the provided state and control input,
-        yielding a jacobian of shape (p*(k+1),6).  Again, the state is expected
+        yielding a jacobian of shape (p*(k+2),6).  Again, the state is expected
         to be in the LCS order [vx, vy, vth, x, y, th]."""
         
         # Get some necessary values from inside the system.
@@ -261,31 +283,35 @@ class TwoDSystemLCSApproximation:
         N = polytope.get_N_matrix(state_sys)
 
         # Build the expression.
-        P_2 = np.hstack((np.zeros((p,1)), np.ones((p,1)), np.zeros((p,n+1))))
-        P_3 = np.hstack((np.zeros((p,2)), np.ones((p,1)), np.zeros((p,n))))
+        P_5 = np.hstack((np.zeros((p,n+1)), np.ones((p,1)), np.zeros((p,1))))
+        P_6 = np.hstack((np.zeros((p,n+2)), np.ones((p,1))))
 
-        mat_1 = np.vstack((D.T, N.T))
-        mat_2 = np.hstack((np.zeros((n,n)), np.eye(n)))
-        mat_3 = np.vstack((np.zeros((p*k_friction, 2*n)), P_2))
-        mat_4 = np.vstack((np.zeros((p*k_friction, p)), np.eye(p)))
+        mat_1 = np.vstack((D.T, N.T, np.zeros((p,n))))
+        mat_2 = np.hstack((np.eye(n), np.zeros((n,n))))
+        mat_3 = np.vstack((np.zeros((p*k_friction,2*n)), P_5,
+                           np.zeros((p,2*n))))
+        mat_4 = np.vstack((np.zeros((p*k_friction, p)), np.eye(p),
+                           np.zeros((p,p))))
 
         diag_r = np.diag(radii)
 
-        cos_vec = np.cos(P_3 @ x + angles)
+        cos_vec = np.cos(P_6 @ x + angles)
         diag_cos = np.diag(cos_vec)
 
         return mat_1 @ mat_2 + (1/dt) * mat_3 + \
-               (1/dt) * mat_4 @ diag_r @ diag_cos @ P_3
+               (1/dt) * mat_4 @ diag_r @ diag_cos @ P_6
 
     def _get_df3_du(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f3
         with respect to control input at the provided state and control input,
-        yielding a jacobian of shape (p*(k+1),3).  Again, the state is expected
+        yielding a jacobian of shape (p*(k+2),3).  Again, the state is expected
         to be in the LCS order [vx, vy, vth, x, y, th]."""
         
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
+        n = polytope.n_config
+        p = polytope.n_contacts
 
         # Will need the state vector in system form.
         state_sys = self._convert_lcs_state_to_system_state(x)
@@ -297,7 +323,7 @@ class TwoDSystemLCSApproximation:
         N = polytope.get_N_matrix(state_sys)
 
         # Build the expression.
-        mat_1 = np.vstack((D.T, N.T))
+        mat_1 = np.vstack((D.T, N.T, np.zeros((p,n))))
 
         return dt * mat_1 @ M_inv
 
@@ -485,16 +511,15 @@ class TwoDSystemLCSApproximation:
         """Check that the history lengths are compatible."""
         state_len = self.state_history.shape[0]
         control_len = self.control_history.shape[0]
-        fn_len = self.force_history_n.shape[0]
-        ft_len = self.force_history_t.shape[0]
-        output_len = self.output_history.shape[0]
+        lam_len = self.lambda_history.shape[0]
+        out_len = self.output_history.shape[0]
 
         if state_len == 0:
-            assert control_len == fn_len == ft_len == 0
+            assert control_len == lam_len == out_len == 0
 
         else:
             assert state_len - control_len == 1
-            assert control_len == fn_len == ft_len == output_len
+            assert control_len == lam_len == out_len
 
     def set_initial_state(self, state):
         """Set the initial state of the system.  This method will automatically
@@ -510,11 +535,10 @@ class TwoDSystemLCSApproximation:
         # provided state.
         self.state_history = state.reshape(1, 6)
         self.control_history = np.zeros((0, 4))
-        self.force_history_n = np.zeros((0, p))
-        self.force_history_t = np.zeros((0, p*k))
-        self.output_history = np.zeros((0, p*(k+1)))
+        self.lambda_history = np.zeros((0, p*(k+2)))
+        self.output_history = np.zeros((0, p*(k+2)))
 
-    def step_lcs_dynamics(self, control_force, control_loc, cn, beta):
+    def step_lcs_dynamics(self, control_force, control_loc, lam):
         """Given new control inputs and contact forces, step the system forward
         in time, appending the next state, provided controls, and provided
         contact forces to the end of the state and control history arrays,
@@ -526,17 +550,16 @@ class TwoDSystemLCSApproximation:
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
         next_state, yk = self.__step_lcs_dynamics(state, control_force,
-                                                  control_loc, cn, beta)
+                                                  control_loc, lam)
 
         # Set the state and control histories.
         control_entry = np.hstack((control_force, control_loc))
         self.state_history = np.vstack((self.state_history, next_state))
         self.control_history = np.vstack((self.control_history, control_entry))
-        self.force_history_n = np.vstack((self.force_history_n, cn))
-        self.force_history_t = np.vstack((self.force_history_t, beta))
+        self.lambda_history = np.vstack((self.lambda_history, lam))
         self.output_history = np.vstack((self.output_history, yk))
 
-    def __step_lcs_dynamics(self, state, control_force, control_loc, cn, beta):
+    def __step_lcs_dynamics(self, state, control_force, control_loc, lambda_k):
         """Given the current state, control_force (given as (2,) array for one
         control force), control_loc (given as (2,) array for one location),
         normal contact forces cn (given as (p,) array), and tangential contact
@@ -545,7 +568,7 @@ class TwoDSystemLCSApproximation:
         that is assumed to be already set via self.set_linearization_point().
         This function does NOT check that the provided control_force and
         control_loc are valid (i.e. within friction cone and acting on the
-        surface of the object).  Returns the next state and the y_k vector."""
+        surface of the object).  Returns the next state."""
 
         # Get all the LCS terms.
         A, B, C, d, G, H, J, l = self.get_lcs_terms()
@@ -557,12 +580,9 @@ class TwoDSystemLCSApproximation:
                                                     control_force, control_loc)
         u = u.squeeze()
 
-        # Convert the normal and tangential forces into one lambda vector.
-        lambda_k = np.hstack((beta.squeeze(), cn.squeeze()))
-
         # Evaluate the expressions for x_{k+1} and y_k.
         x_k1 = A@x + B@u + C@lambda_k + d
-        y_k  = G@x + H@u + J@lambda_k + l
+        y_k = G@x + H@u + J@lambda_k + l
 
         return x_k1, y_k
 

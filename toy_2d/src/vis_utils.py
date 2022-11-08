@@ -16,7 +16,8 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
 
 
 """Make and save a gif of the polytope's state trajectory."""
-def animation_gif_polytope(polytope, states, gif_name, dt, controls=None):
+def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
+                           save=False):
     # Subsample the states and controls to get 10 samples per second of
     # simulated data.
     step = int(0.1/dt)
@@ -81,18 +82,20 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None):
         filenames.append(filename)
         time.sleep(0.05)
 
-    gif_file = f'{file_utils.OUT_DIR}/{gif_name}.gif'
-    with imageio.get_writer(gif_file, mode='I') as writer:
-        for filename in filenames:
-            image = imageio.imread(filename)
-            writer.append_data(image)
-    fps = 1./dt
-    gif = imageio.mimread(gif_file)
-    imageio.mimsave(gif_file, gif, fps=fps)
+    if save:
+        gif_file = f'{file_utils.OUT_DIR}/{gif_name}.gif'
+        with imageio.get_writer(gif_file, mode='I') as writer:
+            for filename in filenames:
+                image = imageio.imread(filename)
+                writer.append_data(image)
+        fps = 1./dt
+        gif = imageio.mimread(gif_file)
+        imageio.mimsave(gif_file, gif, fps=fps)
+        
+        print(f'Saved gif at {gif_file}')
 
     for filename in set(filenames):
         os.remove(filename)
         
     plt.close()
 
-    print(f'Saved gif at {gif_file}')
