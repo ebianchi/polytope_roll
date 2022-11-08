@@ -83,11 +83,14 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 
 pdb.set_trace()
 
+# Generate a plot of the simulated rollout.
+vis_utils.traj_plot(states, controls, 'simulated_traj', save=True)
+
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
     controls=(control_forces, control_locs), save=False)
 
-
+pdb.set_trace()
 
 
 

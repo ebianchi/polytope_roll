@@ -90,9 +90,49 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
         fps = 1./dt
         gif = imageio.mimread(gif_file)
         imageio.mimsave(gif_file, gif, fps=fps)
-        
+
         print(f'Saved gif at {gif_file}')
 
     for filename in set(filenames):
         os.remove(filename)
+
+"""Make and save plots of a system's state and control history."""
+def traj_plot(states, controls, plot_name, save=False):
+    xs, ys, ths = states[:, 0], states[:, 2], states[:, 4]
+    vxs, vys, vths = states[:, 1], states[:, 3], states[:, 5]
+
+    fx, fy = controls[:, 0], controls[:, 1]
+    force_mag = np.linalg.norm(controls[:, :2], axis=1)
+
+    plt.ion()
+    fig = plt.figure(figsize=(6,8))
+
+    ax1 = fig.add_subplot(311)
+    ax1.plot(xs, label='x')
+    ax1.plot(ys, label='y')
+    ax1.plot(ths, label='angle')
+    ax1.set_ylabel('Meters or Radians')
+    ax1.legend()
+
+    ax2 = fig.add_subplot(312)
+    ax2.plot(vxs, label='v_x')
+    ax2.plot(vys, label='v_y')
+    ax2.plot(vths, label='v_angle')
+    ax2.set_ylabel('Velocity')
+    ax2.legend()
+
+    ax3 = fig.add_subplot(313)
+    ax3.plot(fx, label='f_x')
+    ax3.plot(fy, label='f_y')
+    ax3.plot(force_mag, label='force_mag')
+    ax3.set_ylabel('Force')
+    ax3.legend()
+
+    # plt.ylim(1e-18, 1e-10)
+    plt.xlabel('Timesteps')
+
+    if save:
+        filename = f'{file_utils.OUT_DIR}/{plot_name}.png'
+        plt.savefig(filename)
+
 
