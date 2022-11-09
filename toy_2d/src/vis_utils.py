@@ -15,6 +15,8 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                  TwoDimensionalPolytope
 
 
+FORCE_SCALING = 1.  # Scaling factor for viewing forces.
+
 """Make and save a gif of the polytope's state trajectory."""
 def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
                            save=False):
@@ -45,13 +47,16 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
 
     # If controls are given, plot them too.
     if controls is not None:
-        forces, locs = controls
+        if type(controls) == tuple:
+            forces, locs = controls
+        else:
+            forces, locs = controls[:, :2], controls[:, 2:]
         if step > 1:
             forces = forces[0::step]
             locs = locs[0::step]
 
         # scale up the forces so they're more visible
-        forces *= 10
+        forces = forces.copy() * FORCE_SCALING
         ctrl = ax.arrow(locs[0,0]-forces[0,0], locs[0,1]-forces[0,1],
                         forces[0,0], forces[0,1],
                         width=0.1, length_includes_head=True)
