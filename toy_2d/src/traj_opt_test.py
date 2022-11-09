@@ -1,4 +1,5 @@
-"""This file formulates a mixed-integer optimization problem of the form:
+"""This file attempted to formulate a mixed-integer optimization problem of the
+form:
 
            min         sum_{k=0}^{N-1} x_k^T Q x_k + u_k^T R u_k + x_N^T Q_N x_N
     x_k, lambda_k, u_k
@@ -14,6 +15,18 @@ variables, s_k.  The scalars M_1 and M_2 should be large numbers (used for the
 big M method).  Here we should note that the above formulation will want to send
 the system to x_N = 0.  For a different goal position, switch the x_k's above to
 (x_k - x^*) for some goal x^*.
+
+However, I didn't initially get the above (convex) formulation to work.  I did
+have success with the following (non-convex) formulation:
+
+           min         sum_{k=0}^{N-1} x_k^T Q x_k + u_k^T R u_k + x_N^T Q_N x_N
+    x_k, lambda_k, u_k
+
+        such that   x_{k+1} = A x_k + B u_k + C lambda_k + d
+                    y_k = G x_k + H u_k + J lambda_k + l >= 0
+                    lambda_k >= 0
+                    y_k @ lambda_k == 0        <-- complementarity (non-convex)
+                    x_0 = x(0)
 """
 
 import numpy as np
@@ -48,8 +61,8 @@ CONTACT_LOC = np.array([-1, 1])
 CONTACT_ANGLE = 0.
 
 # Initial and goal conditions, in order of vx, vy, vth, x, y, th.  The optimal
-# trajectory will involve pivoting the cube about its bottom left corner until
-# its initial left side ends up on the ground.
+# trajectory will involve pivoting the cube about its bottom right corner until
+# its initial right side ends up on the ground.
 x0 = np.array([0., 0., 0., 0., 1., 0.])
 x_goal = np.array([0., 0., 0., 2., 1., -np.pi/2])
 
