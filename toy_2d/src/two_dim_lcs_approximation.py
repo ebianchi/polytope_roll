@@ -27,6 +27,12 @@ class TwoDSystemLCSApproximation:
                 y_k ~= G x_k + H u_k + J lambda_k + l
             0 <= lambda_k  PERP  y_k => 0
 
+    Some systems may take control inputs as something other than the generalized
+    coordinates.  Thus we define the generalized coordinates u_k via a linear
+    map from the provided coordinates tilde{u}_k as:
+
+            u_k = P tilde{u}_k
+
     NOTE:  The state history will contain the state in order of [vx, vy, vth, x,
     y, th], which is different from the order of the state vector in
     TwoDimensionalSystem objects.  This different order is more convenient for
