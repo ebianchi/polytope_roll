@@ -7,6 +7,7 @@ import imageio
 import numpy as np
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Polygon
 
@@ -102,7 +103,8 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
         os.remove(filename)
 
 """Make and save plots of a system's state and control history."""
-def traj_plot(states, controls, plot_name, save=False):
+def traj_plot(states, controls, plot_name, save=False, costs=None, times=None,
+              title=""):
     xs, ys, ths = states[:, 0], states[:, 2], states[:, 4]
     vxs, vys, vths = states[:, 1], states[:, 3], states[:, 5]
 
@@ -110,31 +112,53 @@ def traj_plot(states, controls, plot_name, save=False):
     force_mag = np.linalg.norm(controls[:, :2], axis=1)
 
     plt.ion()
-    fig = plt.figure(figsize=(6,8))
+    fig = plt.figure(figsize=(8,8))
 
-    ax1 = fig.add_subplot(311)
+    ax1 = fig.add_subplot(321)
     ax1.plot(xs, label='x')
     ax1.plot(ys, label='y')
     ax1.plot(ths, label='angle')
     ax1.set_ylabel('Meters or Radians')
     ax1.legend()
 
-    ax2 = fig.add_subplot(312)
+    ax2 = fig.add_subplot(323)
     ax2.plot(vxs, label='v_x')
     ax2.plot(vys, label='v_y')
     ax2.plot(vths, label='v_angle')
     ax2.set_ylabel('Velocity')
     ax2.legend()
 
-    ax3 = fig.add_subplot(313)
+    ax3 = fig.add_subplot(325)
     ax3.plot(fx, label='f_x')
     ax3.plot(fy, label='f_y')
     ax3.plot(force_mag, label='force_mag')
     ax3.set_ylabel('Force')
     ax3.legend()
+    ax3.set_xlabel('Timesteps')
 
-    # plt.ylim(1e-18, 1e-10)
-    plt.xlabel('Timesteps')
+    if costs is not None:
+        ax4 = fig.add_subplot(322)
+        ax4.plot(costs)
+        ax4.set_ylabel('Optimization Cost')
+        ax4.yaxis.set_label_position("right")
+        ax4.yaxis.tick_right()
+        ax4.set_yscale("log")
+
+    if times is not None:
+        total_time = sum(times)
+
+        ax5 = fig.add_subplot(324)
+        ax5.plot(times, label=f'Total Time: {total_time:.2f}s')
+        ax5.set_ylabel('Loop Time (seconds)')
+        ax5.yaxis.set_label_position("right")
+        ax5.yaxis.tick_right()
+        ax5.set_yscale("log")
+        ax5.set_ylim(3e-2, 2e0)
+        ax5.grid(which='both', axis='y')
+        ax5.legend()
+        ax5.set_xlabel('Loops')
+
+    fig.suptitle(title)
 
     if save:
         filename = f'{file_utils.OUT_DIR}/{plot_name}.png'
