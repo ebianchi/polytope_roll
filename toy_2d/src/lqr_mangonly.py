@@ -14,7 +14,7 @@ from toy_2d.src import file_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                         TwoDimensionalPolytope
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
-                                      TwoDimensionalSystem
+                                      TwoDimensionalSystem,TwoDSystemMagOnly
 
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
@@ -140,37 +140,39 @@ class iLQR():
     def get_linearized_discrete_dynamics(self, state, action):
         q = np.array([state[0], state[2], state[4]])
         v = np.array([state[1], state[3], state[5]])
-        control_loc = polytope.get_vertex_locations_world(state)[2, :]
-        theta = state[4]
-        ang = np.pi + theta
-        control_mag = action[0]
-        control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-        lcs.set_linearization_point(q,v, control_loc, control_vec)
+        # control_loc = polytope.get_vertex_locations_world(state)[2, :]
+        # theta = state[4]
+        # ang = np.pi + theta
+        # control_mag = action[0]
+        # control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+        lcs.set_linearization_point(q,v, action)
         A, B_gen = lcs.get_A_matrix(), lcs.get_B_matrix()
-        B = self.convert_gen_to_force(state, action, B_gen)
+        pmat = lcs.get_P_matrix()
+        B = B_gen@pmat
+        # B = self.convert_gen_to_force(state, action, B_gen)
 
         return A,B
     
     
-    def convert_gen_to_force(self, state, action, B_gen):
-        control_loc = polytope.get_vertex_locations_world(state)[2, :]
-        theta = state[4]
-        ang = np.pi + theta
-        control_mag = action[0]
-        control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-        fx, fy = control_vec[0], control_vec[1]
-        u_locx, u_locy = control_loc[0], control_loc[1]
-        x, y = state[0], state[2]
-        lever_x = u_locx - x
-        lever_y = u_locy - y
-        conv_mat = np.eye(3,2)
-        conv_mat[-1,:] = np.array([-lever_y, lever_x])
-        B_two_ctrls = B_gen@conv_mat #this is 6x2... convert to 6x1
-        theta = state[4]
-        ang = np.pi + theta
-        control_vec = np.array([-np.cos(ang), -np.sin(ang)])
-        B = (B_two_ctrls@control_vec).reshape((self.nx, self.nu))
-        return B
+    # def convert_gen_to_force(self, state, action, B_gen):
+    #     control_loc = polytope.get_vertex_locations_world(state)[2, :]
+    #     theta = state[4]
+    #     ang = np.pi + theta
+    #     control_mag = action[0]
+    #     control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+    #     fx, fy = control_vec[0], control_vec[1]
+    #     u_locx, u_locy = control_loc[0], control_loc[1]
+    #     x, y = state[0], state[2]
+    #     lever_x = u_locx - x
+    #     lever_y = u_locy - y
+    #     conv_mat = np.eye(3,2)
+    #     conv_mat[-1,:] = np.array([-lever_y, lever_x])
+    #     B_two_ctrls = B_gen@conv_mat #this is 6x2... convert to 6x1
+    #     theta = state[4]
+    #     ang = np.pi + theta
+    #     control_vec = np.array([-np.cos(ang), -np.sin(ang)])
+    #     B = (B_two_ctrls@control_vec).reshape((self.nx, self.nu))
+    #     return B
 
 
     def backward_pass(self,  xx, uu):
@@ -221,13 +223,14 @@ class iLQR():
 
     def sim_forward(self, state, action):
         system.set_initial_state(state)
-        control_loc = polytope.get_vertex_locations_world(state)[2, :]
-        theta = state[4]
-        ang = np.pi + theta
-        control_mag = action[0]
-        control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-        controls = np.hstack((control_vec, control_loc))
+        # control_loc = polytope.get_vertex_locations_world(state)[2, :]
+        # theta = state[4]
+        # ang = np.pi + theta
+        # control_mag = action[0]
+        # control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+        # controls = np.hstack((control_vec, control_loc))
         # system.step_dynamics(control_vec, control_loc)
+        controls = action
         system.step_dynamics(controls)
         next_state = system.state_history[-1,:]
         return next_state
@@ -241,19 +244,19 @@ class iLQR():
             state = system.state_history[-1, :]
 
             # Find the third vertex location.
-            control_loc = polytope.get_vertex_locations_world(state)[2, :]
+            # control_loc = polytope.get_vertex_locations_world(state)[2, :]
 
             # Apply the force at a fixed angle relative to the polytope.
-            theta = state[4]
+            # theta = state[4]
             if(o==len(uu)-1):
                 print(state)
-            ang = np.pi + theta
-            control_mag = uu[o]
-            control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+            # ang = np.pi + theta
+            # control_mag = uu[o]
+            # control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
             # control_vec = uu[o]
             # control_vec = control_mag * np.array([-0.5, 0])
 
-            system.step_dynamics(control_vec, control_loc)
+            system.step_dynamics(uu[o])
 
         # Collect the state and control histories.
         states = system.state_history
@@ -263,17 +266,16 @@ class iLQR():
         # pdb.set_trace()
 
         # Generate a gif of the simulated rollout.
-        if(show_vis):
-            vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
-                controls=(control_forces, control_locs))     
+        vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
+            controls=(control_forces, control_locs), save=False)     
 
     def save_contols(self, controls, iter):
-        file_name = "controls"+ str(iter)
+        file_name = "controls"
         path = f'{file_utils.OUT_DIR}/{file_name}.txt'
-        # file1 = open(path, "w")
-        with open(path, "w") as txt_file:
-            for line in controls:
-                txt_file.write(" ".join(line) + "\n") 
+        file1 = open(path, "w")
+        # with open(path, "w") as txt_file:
+        for line in controls:
+            file1.write(str(line[0]) + "\n") 
         file1.close()
 
     def calculate_optimal_trajectory(self, x, uu_guess) :
@@ -362,7 +364,14 @@ system_params = TwoDimensionalSystemParams(
     polytope = polytope,
     mu_control = MU_CONTROL
 )
-system = TwoDimensionalSystem(system_params)
+# system = TwoDimensionalSystem(system_params)
+
+# Contact location and direction.
+CONTACT_LOC = np.array([-1, 1])
+CONTACT_ANGLE = 0.
+
+system = TwoDSystemMagOnly(system_params, CONTACT_LOC, CONTACT_ANGLE)
+
 
 # Create an LCS approximation from the system.
 lcs = TwoDSystemLCSApproximation(system)
@@ -374,20 +383,29 @@ lcs = TwoDSystemLCSApproximation(system)
 x0 = np.array([0, 0, 1.0, 0, 0, 0])
 x_goal = np.array([2.0, 0, 1.0, 0, -np.pi/2, 0])
 Q = np.eye(6)
-Q[1,1]=0
-Q[3,3]=0
-Q[5,5]=0
-Q[0,0]=0
+Q[1,1]=Q[1,1]*10
+Q[3,3]=Q[3,3]*10
+Q[5,5]=Q[5,5]*10
+# Q[0,0]=Q[0,0]*10
 Qf = np.eye(6)*10
 # Qf[1,1]=0
 # Qf[3,3]=0
 # Qf[5,5]=0
-R = np.eye(1)*0.05
+R = np.eye(1)*0
 # R = np.zeros((2,2))
 
-N = 1250
+N = 1200
 u_guess = np.ones((N-1,1))*5
-# print(len(u_guess))
+load = True
+if(load):
+    file_name = "controls"
+    path = f'{file_utils.OUT_DIR}/{file_name}.txt'
+    with open(path, 'r') as fd:
+    # reader = csv.reader(fd)
+        j=0
+        for row in fd:
+            u_guess[j] = row
+            j+=1
 
 obj = iLQR(x0, x_goal, N, DT, Q, R, Qf)
 obj.calculate_optimal_trajectory(x0, u_guess)
