@@ -10,6 +10,7 @@ import pdb
 import matplotlib.pyplot as plt
 
 from toy_2d.src import vis_utils
+from toy_2d.src import file_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                         TwoDimensionalPolytope
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
@@ -218,9 +219,6 @@ class iLQR():
             V_xxp1 = Q_xx - KK[i].T@Q_uu@KK[i]
         return dd, KK
 
-    
-    
-
     def sim_forward(self, state, action):
         system.set_initial_state(state)
         control_loc = polytope.get_vertex_locations_world(state)[2, :]
@@ -228,7 +226,9 @@ class iLQR():
         ang = np.pi + theta
         control_mag = action[0]
         control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
-        system.step_dynamics(control_vec, control_loc)
+        controls = np.hstack((control_vec, control_loc))
+        # system.step_dynamics(control_vec, control_loc)
+        system.step_dynamics(controls)
         next_state = system.state_history[-1,:]
         return next_state
 
@@ -267,6 +267,15 @@ class iLQR():
             vis_utils.animation_gif_polytope(polytope, states, 'small_force', DT,
                 controls=(control_forces, control_locs))     
 
+    def save_contols(self, controls, iter):
+        file_name = "controls"+ str(iter)
+        path = f'{file_utils.OUT_DIR}/{file_name}.txt'
+        # file1 = open(path, "w")
+        with open(path, "w") as txt_file:
+            for line in controls:
+                txt_file.write(" ".join(line) + "\n") 
+        file1.close()
+
     def calculate_optimal_trajectory(self, x, uu_guess) :
 
         """
@@ -304,6 +313,7 @@ class iLQR():
             i += 1
             if(i%20==0 and i >1):
                 print(f'cost: {Jnext}')
+                self.save_contols(uu, i)
                 self.animate(x, uu, show_vis=True)
 
         print(f'Converged to cost {Jnext}')

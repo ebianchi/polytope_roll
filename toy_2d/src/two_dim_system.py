@@ -250,6 +250,7 @@ class TwoDimensionalSystem:
         given as [fx, fy, loc_x, loc_y]."""
 
         controls = controls.squeeze()
+        # print(controls.shape)
         assert controls.shape == (4,)
 
         x, y = state[0], state[2]
