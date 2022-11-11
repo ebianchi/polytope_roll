@@ -184,9 +184,12 @@ class TwoDimensionalSystem:
         state = self.state_history[-1, :]
         next_state, lam, out = self.__step_dynamics(state, controls)
 
+        # Get the controls in the full [fx, fy, loc_x, loc_y] format.
+        full_controls = self.get_full_controls(state, controls)
+
         # Set the state and control histories.
         self.state_history = np.vstack((self.state_history, next_state))
-        self.control_history = np.vstack((self.control_history, controls))
+        self.control_history = np.vstack((self.control_history, full_controls))
         self.lambda_history = np.vstack((self.lambda_history, lam))
         self.output_history = np.vstack((self.output_history, out))
 
@@ -246,22 +249,127 @@ class TwoDimensionalSystem:
 
     def convert_input_to_generalized_coords(self, state, controls):
         """Convert an input force and location to forces in the generalized
-        coordinates of the system, given its state.  Assumes the controls are
-        given as [fx, fy, loc_x, loc_y]."""
+        coordinates of the system, given its state.  This function itself makes
+        no assumptions about the form of the controls, which is interpreted in
+        self.get_map_from_controls_to_gen_coordinates, leaving flexibility in
+        how the controls are provided."""
+
+        # Use the map from controls to generalized coordinates.
+        P = self.get_map_from_controls_to_gen_coordinates(state, controls)
+        return P @ controls
+
+    def get_map_from_controls_to_gen_coordinates(self, state, controls):
+        """Return the map P that converts the control inputs into generalized
+        coordinates, i.e. u_gen = P @ tilde{u}.  In this case, we assume the
+        controls are in the form [fx, fy, loc_x, loc_y], and we linearize about
+        the current state and control location."""
 
         controls = controls.squeeze()
         # print(controls.shape)
         assert controls.shape == (4,)
 
+        # Grab the current state and control location for linearization.
         x, y = state[0], state[2]
+        u_locx, u_locy = controls[2], controls[3]
 
-        control_force, control_loc = controls[:2], controls[2:]
-        fx, fy = control_force[0], control_force[1]
-        u_locx, u_locy = control_loc[0], control_loc[1]
-
+        # Build the expressions for force in the x direction, force in the y
+        # direction, and torque about the CoM.
         lever_x = u_locx - x
         lever_y = u_locy - y
 
-        torque = lever_x*fy - lever_y*fx
+        return np.array([[1., 0., 0., 0.],
+                         [0., 1., 0., 0.],
+                         [-lever_y, lever_x, 0., 0.]])
 
-        return np.array([fx, fy, torque])
+    def get_full_controls(self, _state, controls):
+        """Given the controls in whatever format, convert it into the format
+        [fx, fy, loc_x, loc_y], which is most convenient for visualization
+        later.  In this TwoDimensionalSystem, we assume controls is already in
+        that format."""
+        
+        # Return controls itself.
+        return controls.reshape(1, 4)
+
+
+class TwoDSystemMagOnly(TwoDimensionalSystem):
+    """An extension of the TwoDimensionalSystem that assumes the body-frame
+    control contact location and direction is fixed.  This amendment only
+    requires adapting self.get_map_from_controls_to_gen_coordinates() and
+    self.get_full_controls(), which are assisted by keeping track of the body-
+    frame location and direction in new properties outlined below.
+
+    Properties:
+        contact_point:  Location (given as (2,) x,y numpy array) in body-frame
+                        of the control contact force.
+        contact_angle:  Direction (given as an angle) in body-frame of the
+                        control contact force.
+    """
+    params: TwoDimensionalSystemParams
+    contact_point: np.array
+    contact_angle: float
+
+    def __init__(self, params: TwoDimensionalSystemParams,
+                 contact_point: np.array, contact_angle: float):
+        # Do some checks that the contact point and contact direction make
+        # sense.
+        contact_point = contact_point.squeeze()
+        assert contact_point.shape == (2,)
+        assert type(contact_angle) == float
+
+        # Initialize the underlying TwoDimensionalSystem.
+        super().__init__(params)
+
+        # Save the contact point and contact angle.
+        self.contact_point = contact_point
+        self.contact_angle = contact_angle
+
+    def get_map_from_controls_to_gen_coordinates(self, state, _controls):
+        """Given controls as a (1,) vector corresponding to a magnitude of
+        force, find the (3,1) linear map that will convert it into a generalized
+        force vector corresponding to [fx, fy, torque]."""
+
+        # First, the x and y components of the force just depend on the angle
+        # of the vector.
+        theta = state[4]
+        body_angle = self.contact_angle
+        world_angle = body_angle + theta
+
+        # The torque additionally depends on the body-frame contact location.
+        lever_x, lever_y = self.contact_point[0], self.contact_point[1]
+
+        # Build the expression.
+        return np.array([[np.cos(world_angle)],
+                         [np.sin(world_angle)],
+                         [lever_x * np.sin(body_angle) - \
+                          lever_y * np.cos(body_angle)]])
+
+    def get_full_controls(self, state, controls):
+        """Given controls as a (1,) vector corresponding to a magnitude of
+        force, find the (1,4) controls corresponding to [fx, fy, loc_x, loc_y]
+        to be stored in the control history."""
+
+        x, y, theta = state[0], state[2], state[4]
+
+        # Get the control input as a single number.
+        assert controls.shape == (1,)
+        mag = controls[0]
+
+        # First, the x and y components of the force just depend on the angle
+        # of the vector.
+        angle = self.contact_angle + theta
+        fx = mag * np.cos(angle)
+        fy = mag * np.sin(angle)
+
+        # The location of the force depends on the location of the system as
+        # well as the relative location of the contact location.
+        dx_body_frame = self.contact_point[0]
+        dy_body_frame = self.contact_point[1]
+
+        dx_world = dx_body_frame*np.cos(theta) - dy_body_frame*np.sin(theta)
+        dy_world = dx_body_frame*np.sin(theta) + dy_body_frame*np.cos(theta)
+
+        loc_x = x + dx_world
+        loc_y = y + dy_world
+
+        # Return [fx, fy, loc_x, loc_y].
+        return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)

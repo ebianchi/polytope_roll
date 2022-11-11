@@ -35,8 +35,13 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams
 from toy_2d.src.two_dim_system import TwoDimensionalSystem
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
+from toy_2d.src.two_dim_system import TwoDSystemMagOnly
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
+
+# Test magnitude only system formulation and/or the full control input system.
+TEST_MAG_ONLY = True
+TEST_FULL = True
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
 x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
@@ -51,134 +56,270 @@ polytope = TwoDimensionalPolytope(poly_params)
 # contact's friction parameter.
 system_params = TwoDimensionalSystemParams(dt = 0.002, polytope = polytope,
                                            mu_control = 0.5)
-system = TwoDimensionalSystem(system_params)
 
-# Create an LCS approximation from the system.
-lcs = TwoDSystemLCSApproximation(system)
-pdb.set_trace()
+if TEST_FULL:
+    system = TwoDimensionalSystem(system_params)
 
-# Rollout with a fixed (body-frame) force at one of the vertices.
-states_from_nllcs = x0.reshape(1,6)
-outputs_from_nllcs = np.zeros((0, 16))
-states_from_lcs = x0.reshape(1,6)
-outputs_from_lcs = np.zeros((0, 16))
-system.set_initial_state(x0)
-for _ in range(1250):
-    # First, get the control force.
-    state_sys = system.state_history[-1, :]
+    # Create an LCS approximation from the system.
+    lcs = TwoDSystemLCSApproximation(system)
+    pdb.set_trace()
 
-    # -> Find the third vertex location.
-    control_loc = polytope.get_vertex_locations_world(state_sys)[2, :]
+    # Rollout with a fixed (body-frame) force at one of the vertices.
+    states_from_nllcs = x0.reshape(1,6)
+    outputs_from_nllcs = np.zeros((0, 16))
+    states_from_lcs = x0.reshape(1,6)
+    outputs_from_lcs = np.zeros((0, 16))
+    system.set_initial_state(x0)
+    for _ in range(1250):
+        # First, get the control force.
+        state_sys = system.state_history[-1, :]
 
-    # -> Apply the force at a fixed angle relative to the polytope.
-    theta = state_sys[4]
-    ang = np.pi + theta
-    control_mag = 0.3
-    control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+        # -> Find the third vertex location.
+        control_loc = polytope.get_vertex_locations_world(state_sys)[2, :]
 
-    # Second, step the true system, using the LCP simulation.
-    system.step_dynamics(control_vec, control_loc)
-    next_state_sys = system.state_history[-1, :]
+        # -> Apply the force at a fixed angle relative to the polytope.
+        theta = state_sys[4]
+        ang = np.pi + theta
+        control_mag = 0.3
+        control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
+        controls = np.hstack((control_vec, control_loc))
 
-    # Third, get the same state from the nonlinear form embedded in the LCS
-    # representation.
-    state_lcs = lcs._convert_system_state_to_lcs_state(state_sys)
-    u_lcs = system.convert_input_to_generalized_coords(state_sys, control_vec,
-                                                       control_loc)
-    f1 = lcs._get_f_1(state_lcs, u_lcs)
-    f2 = lcs._get_f_2(state_lcs)
-    f3 = lcs._get_f_3(state_lcs, u_lcs)
-    f4 = lcs._get_f_4(state_lcs)
+        # Second, step the true system, using the LCP simulation.
+        system.step_dynamics(controls)
+        next_state_sys = system.state_history[-1, :]
 
-    # -> Get the solved contact forces from the true system.
-    lambda_k = system.lambda_history[-1, :]
+        # Third, get the same state from the nonlinear form embedded in the LCS
+        # representation.
+        # -> This requires setting the linearization point so we can calculate the
+        #    controls mapping to generalized coordinates.
+        state_lcs = lcs._convert_system_state_to_lcs_state(state_sys)
+        v, q = state_lcs[:3], state_lcs[3:]
+        lcs.set_linearization_point(q, v, controls)
 
-    # -> Do the nonlinear LCS simulation step and store the results.
-    next_state_nllcs = f1 + f2 @ lambda_k
-    next_state_from_nllcs = lcs._convert_lcs_state_to_system_state(
-                                                            next_state_nllcs)
-    states_from_nllcs = np.vstack((states_from_nllcs,
-                                   next_state_from_nllcs.reshape(1,6)))
-    output_from_nllcs = f3 + f4 @ lambda_k
-    outputs_from_nllcs = np.vstack((outputs_from_nllcs,
-                                    output_from_nllcs.reshape(1,16)))
+        P = lcs.get_P_matrix()
+        u_lcs = P @ controls
 
-    # Fourth, do the linearized LCS approximation, linearizing about the current
-    # state and applying the controls and true contact forces.
-    # -> Set the initial state and linearize about it.
-    lcs.set_initial_state(state_lcs)
-    v, q = state_lcs[:3], state_lcs[3:]
-    lcs.set_linearization_point(q, v, control_vec, control_loc)
+        f1 = lcs._get_f_1(state_lcs, u_lcs)
+        f2 = lcs._get_f_2(state_lcs)
+        f3 = lcs._get_f_3(state_lcs, u_lcs)
+        f4 = lcs._get_f_4(state_lcs)
 
-    # -> Step the LCS dynamics.
-    lcs.step_lcs_dynamics(control_vec, control_loc, lambda_k)
+        # -> Get the solved contact forces from the true system.
+        lambda_k = system.lambda_history[-1, :]
 
-    # -> Save the LCS simulation results.
-    next_state_lcs = lcs.state_history[-1, :]
-    next_state_from_lcs = lcs._convert_lcs_state_to_system_state(next_state_lcs)
-    states_from_lcs = np.vstack((states_from_lcs,
-                                 next_state_from_lcs.reshape(1,6)))
-    output_from_lcs = lcs.output_history[-1, :]
-    outputs_from_lcs = np.vstack((outputs_from_lcs,
-                                  output_from_lcs.reshape(1,16)))
+        # -> Do the nonlinear LCS simulation step and store the results.
+        next_state_nllcs = f1 + f2 @ lambda_k
+        next_state_from_nllcs = lcs._convert_lcs_state_to_system_state(
+                                                                next_state_nllcs)
+        states_from_nllcs = np.vstack((states_from_nllcs,
+                                       next_state_from_nllcs.reshape(1,6)))
+        output_from_nllcs = f3 + f4 @ lambda_k
+        outputs_from_nllcs = np.vstack((outputs_from_nllcs,
+                                        output_from_nllcs.reshape(1,16)))
 
-# Compare the dynamics from the 3 methods, against the "true" system dynamics.
-states_from_sys = system.state_history
-errors_nllcs = np.array([np.linalg.norm(states_from_sys[i] - \
-                                        states_from_nllcs[i]) \
-                   for i in range(states_from_sys.shape[0])])
-print(f'Worst state mismatch between true system and nonlinear LCS ' \
-      + f'representation is {max(errors_nllcs)}.')
+        # Fourth, do the linearized LCS approximation, linearizing about the current
+        # state and applying the controls and true contact forces.
+        # -> Set the initial state and linearize about it.
+        lcs.set_initial_state(state_lcs)
 
-errors_lcs = np.array([np.linalg.norm(states_from_sys[i]-states_from_lcs[i]) \
+        # -> Step the LCS dynamics.
+        lcs.step_lcs_dynamics(controls, lambda_k)
+
+        # -> Save the LCS simulation results.
+        next_state_lcs = lcs.state_history[-1, :]
+        next_state_from_lcs = lcs._convert_lcs_state_to_system_state(next_state_lcs)
+        states_from_lcs = np.vstack((states_from_lcs,
+                                     next_state_from_lcs.reshape(1,6)))
+        output_from_lcs = lcs.output_history[-1, :]
+        outputs_from_lcs = np.vstack((outputs_from_lcs,
+                                      output_from_lcs.reshape(1,16)))
+
+    # Compare the dynamics from the 3 methods, against the "true" system dynamics.
+    states_from_sys = system.state_history
+    errors_nllcs = np.array([np.linalg.norm(states_from_sys[i] - \
+                                            states_from_nllcs[i]) \
                        for i in range(states_from_sys.shape[0])])
-print(f'Worst state mismatch between true system and LCS approximation ' \
-      + f'is {max(errors_lcs)}.')
+    print(f'Worst state mismatch between true system and nonlinear LCS ' \
+          + f'representation is {max(errors_nllcs)}.')
 
-plt.ion()
-plt.figure()
-plt.plot(errors_nllcs, label='Nonlinear LCS Representation vs True')
-plt.plot(errors_lcs, label='LCS Approximation vs True')
-plt.yscale("log")
-plt.ylim(1e-18, 1e-10)
-plt.xlabel('Timesteps')
-plt.ylabel('State error')
-plt.legend()
+    errors_lcs = np.array([np.linalg.norm(states_from_sys[i]-states_from_lcs[i]) \
+                           for i in range(states_from_sys.shape[0])])
+    print(f'Worst state mismatch between true system and LCS approximation ' \
+          + f'is {max(errors_lcs)}.')
 
-filename = f'{file_utils.OUT_DIR}/lcs_dynamics_test.png'
-plt.savefig(filename)
+    plt.ion()
+    plt.figure()
+    plt.plot(errors_nllcs, label='Nonlinear LCS Representation vs True')
+    plt.plot(errors_lcs, label='LCS Approximation vs True')
+    plt.yscale("log")
+    plt.ylim(1e-18, 1e-10)
+    plt.xlabel('Timesteps')
+    plt.ylabel('State error')
+    plt.legend()
 
-pdb.set_trace()
+    filename = f'{file_utils.OUT_DIR}/lcs_dynamics_test.png'
+    plt.savefig(filename)
+
+    pdb.set_trace()
 
 
-# Compare the outputs from the 3 methods, against the "true" system outputs.
-outputs_from_sys = system.output_history
-errors_nllcs = np.array([np.linalg.norm(outputs_from_sys[i] - \
-                                        outputs_from_nllcs[i]) \
-                   for i in range(outputs_from_sys.shape[0])])
-print(f'Worst output mismatch between true system and nonlinear LCS ' \
-      + f'representation is {max(errors_nllcs)}.')
-
-errors_lcs = np.array([np.linalg.norm(outputs_from_sys[i]-outputs_from_lcs[i]) \
+    # Compare the outputs from the 3 methods, against the "true" system outputs.
+    outputs_from_sys = system.output_history
+    errors_nllcs = np.array([np.linalg.norm(outputs_from_sys[i] - \
+                                            outputs_from_nllcs[i]) \
                        for i in range(outputs_from_sys.shape[0])])
-print(f'Worst output mismatch between true system and LCS approximation ' \
-      + f'is {max(errors_lcs)}.')
+    print(f'Worst output mismatch between true system and nonlinear LCS ' \
+          + f'representation is {max(errors_nllcs)}.')
 
-plt.ion()
-plt.figure()
-plt.plot(errors_nllcs, label='Nonlinear LCS Representation vs True')
-plt.plot(errors_lcs, label='LCS Approximation vs True')
-plt.yscale("log")
-plt.ylim(1e-8, 1e-2)
-plt.xlabel('Timesteps')
-plt.ylabel('Output error')
-plt.legend()
+    errors_lcs = np.array([np.linalg.norm(outputs_from_sys[i]-outputs_from_lcs[i]) \
+                           for i in range(outputs_from_sys.shape[0])])
+    print(f'Worst output mismatch between true system and LCS approximation ' \
+          + f'is {max(errors_lcs)}.')
 
-filename = f'{file_utils.OUT_DIR}/lcs_output_test.png'
-plt.savefig(filename)
+    plt.ion()
+    plt.figure()
+    plt.plot(errors_nllcs, label='Nonlinear LCS Representation vs True')
+    plt.plot(errors_lcs, label='LCS Approximation vs True')
+    plt.yscale("log")
+    plt.ylim(1e-8, 1e-2)
+    plt.xlabel('Timesteps')
+    plt.ylabel('Output error')
+    plt.legend()
 
-pdb.set_trace()
+    filename = f'{file_utils.OUT_DIR}/lcs_output_test.png'
+    plt.savefig(filename)
 
+    pdb.set_trace()
+
+
+if TEST_MAG_ONLY:
+    # Repeat test using a magnitude only system.
+    CONTACT_LOC = np.array([-1, 1])
+    CONTACT_ANGLE = 0.
+
+    system = TwoDSystemMagOnly(system_params, CONTACT_LOC, CONTACT_ANGLE)
+
+    # Create an LCS approximation from the system.
+    lcs = TwoDSystemLCSApproximation(system)
+    pdb.set_trace()
+
+    # Rollout with a fixed (body-frame) force at one of the vertices.
+    states_from_nllcs = x0.reshape(1,6)
+    outputs_from_nllcs = np.zeros((0, 16))
+    states_from_lcs = x0.reshape(1,6)
+    outputs_from_lcs = np.zeros((0, 16))
+    system.set_initial_state(x0)
+    for _ in range(1250):
+        # First, get the control force.
+        controls = np.array([0.3])
+
+        # Second, step the true system, using the LCP simulation.
+        state_sys = system.state_history[-1, :]
+        system.step_dynamics(controls)
+        next_state_sys = system.state_history[-1, :]
+
+        # Third, get the same state from the nonlinear form embedded in the LCS
+        # representation.
+        # -> This requires setting the linearization point so we can calculate the
+        #    controls mapping to generalized coordinates.
+        state_lcs = lcs._convert_system_state_to_lcs_state(state_sys)
+        v, q = state_lcs[:3], state_lcs[3:]
+        lcs.set_linearization_point(q, v, controls)
+
+        P = lcs.get_P_matrix()
+        u_lcs = P @ controls
+
+        f1 = lcs._get_f_1(state_lcs, u_lcs)
+        f2 = lcs._get_f_2(state_lcs)
+        f3 = lcs._get_f_3(state_lcs, u_lcs)
+        f4 = lcs._get_f_4(state_lcs)
+
+        # -> Get the solved contact forces from the true system.
+        lambda_k = system.lambda_history[-1, :]
+
+        # -> Do the nonlinear LCS simulation step and store the results.
+        next_state_nllcs = f1 + f2 @ lambda_k
+        next_state_from_nllcs = lcs._convert_lcs_state_to_system_state(
+                                                                next_state_nllcs)
+        states_from_nllcs = np.vstack((states_from_nllcs,
+                                       next_state_from_nllcs.reshape(1,6)))
+        output_from_nllcs = f3 + f4 @ lambda_k
+        outputs_from_nllcs = np.vstack((outputs_from_nllcs,
+                                        output_from_nllcs.reshape(1,16)))
+
+        # Fourth, do the linearized LCS approximation, linearizing about the current
+        # state and applying the controls and true contact forces.
+        # -> Set the initial state and linearize about it.
+        lcs.set_initial_state(state_lcs)
+
+        # -> Step the LCS dynamics.
+        lcs.step_lcs_dynamics(controls, lambda_k)
+
+        # -> Save the LCS simulation results.
+        next_state_lcs = lcs.state_history[-1, :]
+        next_state_from_lcs = lcs._convert_lcs_state_to_system_state(next_state_lcs)
+        states_from_lcs = np.vstack((states_from_lcs,
+                                     next_state_from_lcs.reshape(1,6)))
+        output_from_lcs = lcs.output_history[-1, :]
+        outputs_from_lcs = np.vstack((outputs_from_lcs,
+                                      output_from_lcs.reshape(1,16)))
+
+    # Compare the dynamics from the 3 methods, against the "true" system dynamics.
+    states_from_sys = system.state_history
+    errors_nllcs = np.array([np.linalg.norm(states_from_sys[i] - \
+                                            states_from_nllcs[i]) \
+                       for i in range(states_from_sys.shape[0])])
+    print(f'Worst state mismatch between true system and nonlinear LCS ' \
+          + f'representation is {max(errors_nllcs)}.')
+
+    errors_lcs = np.array([np.linalg.norm(states_from_sys[i]-states_from_lcs[i]) \
+                           for i in range(states_from_sys.shape[0])])
+    print(f'Worst state mismatch between true system and LCS approximation ' \
+          + f'is {max(errors_lcs)}.')
+
+    plt.ion()
+    plt.figure()
+    plt.plot(errors_nllcs, label='Nonlinear LCS Representation vs True')
+    plt.plot(errors_lcs, label='LCS Approximation vs True')
+    plt.yscale("log")
+    plt.ylim(1e-18, 1e-10)
+    plt.xlabel('Timesteps')
+    plt.ylabel('State error')
+    plt.legend()
+
+    filename = f'{file_utils.OUT_DIR}/lcs_mag_dynamics_test.png'
+    plt.savefig(filename)
+
+    pdb.set_trace()
+
+
+    # Compare the outputs from the 3 methods, against the "true" system outputs.
+    outputs_from_sys = system.output_history
+    errors_nllcs = np.array([np.linalg.norm(outputs_from_sys[i] - \
+                                            outputs_from_nllcs[i]) \
+                       for i in range(outputs_from_sys.shape[0])])
+    print(f'Worst output mismatch between true system and nonlinear LCS ' \
+          + f'representation is {max(errors_nllcs)}.')
+
+    errors_lcs = np.array([np.linalg.norm(outputs_from_sys[i]-outputs_from_lcs[i]) \
+                           for i in range(outputs_from_sys.shape[0])])
+    print(f'Worst output mismatch between true system and LCS approximation ' \
+          + f'is {max(errors_lcs)}.')
+
+    plt.ion()
+    plt.figure()
+    plt.plot(errors_nllcs, label='Nonlinear LCS Representation vs True')
+    plt.plot(errors_lcs, label='LCS Approximation vs True')
+    plt.yscale("log")
+    plt.ylim(1e-8, 1e-2)
+    plt.xlabel('Timesteps')
+    plt.ylabel('Output error')
+    plt.legend()
+
+    filename = f'{file_utils.OUT_DIR}/lcs_mag_output_test.png'
+    plt.savefig(filename)
+
+    pdb.set_trace()
 
 
 
