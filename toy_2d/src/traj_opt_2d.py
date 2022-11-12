@@ -40,7 +40,7 @@ from toy_2d.src import file_utils
 from toy_2d.src import vis_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams
-from toy_2d.src.two_dim_system import TwoDSystemMagOnly
+from toy_2d.src.two_dim_system import TwoDSystemForceOnly
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
@@ -50,12 +50,13 @@ from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 DT_SIM = 0.002
 T_MULTIPLE = 50
 DT_TRAJ_OPT = DT_SIM * T_MULTIPLE
-MU_GROUND = 0.5  # stick/slip transition is between mu = 0.5 and 0.49
+MU_GROUND = 0.5
+MU_CONTROL = 0.3
 M1 = 1e3
 M2 = 1e3
-LOOPS = 50
+LOOPS = 20
 INPUT_LIMIT = 5.
-LOOKAHEAD = 3
+LOOKAHEAD = 4
 USE_BIG_M = False
 USE_NON_CONVEX = not USE_BIG_M
 SAVE_OUTPUT = False
@@ -79,15 +80,15 @@ polytope = TwoDimensionalPolytope(poly_params)
 # Create a simulation system from the polytope, a simulation timestep, and a
 # control contact's friction parameter.
 sim_system_params = TwoDimensionalSystemParams(dt = DT_SIM, polytope = polytope,
-                                               mu_control = 0.5)
-sim_system = TwoDSystemMagOnly(sim_system_params, CONTACT_LOC, CONTACT_ANGLE)
+                                               mu_control = MU_CONTROL)
+sim_system = TwoDSystemForceOnly(sim_system_params, CONTACT_LOC, CONTACT_ANGLE)
 
 # Create a system for trajectory optimization from the polytope, a longer
 # timestep, and a control contact's friction parameter.
 traj_opt_system_params = TwoDimensionalSystemParams(dt = DT_TRAJ_OPT,
-                                        polytope = polytope, mu_control = 0.5)
-traj_opt_system = TwoDSystemMagOnly(traj_opt_system_params, CONTACT_LOC,
-                                    CONTACT_ANGLE)
+                                polytope = polytope, mu_control = MU_CONTROL)
+traj_opt_system = TwoDSystemForceOnly(traj_opt_system_params, CONTACT_LOC,
+                                      CONTACT_ANGLE)
 
 # Create an LCS approximation from the trajectory optimization system.
 lcs = TwoDSystemLCSApproximation(traj_opt_system)
@@ -99,7 +100,7 @@ k_friction = polytope.n_friction
 
 # Build Q and R matrices.
 Q = np.diag([0.1, 0.1, 0.1, 1., 1., 1.])
-R = np.diag([0.5])
+R = np.diag([0.00003, 0.00003])
 
 # Set the initial state of the system.
 sim_system.set_initial_state(lcs._convert_lcs_state_to_system_state(x0))
@@ -108,7 +109,7 @@ sim_system.set_initial_state(lcs._convert_lcs_state_to_system_state(x0))
 x_i = x0
 
 # Keep track of the solved control inputs, objective costs, and loop times.
-inputs, costs, times = np.array([]), np.array([]), np.array([])
+inputs, costs, times = np.zeros((0,2)), np.array([]), np.array([])
 
 for _ in range(LOOPS):
     # Start timer.
@@ -118,7 +119,7 @@ for _ in range(LOOPS):
     state_sys = lcs._convert_lcs_state_to_system_state(x_i)
     lcs.set_initial_state(x_i)
     v, q = x_i[:3], x_i[3:]
-    controls = np.array([0.])
+    controls = np.array([0., 0.])
     lcs.set_linearization_point(q, v, controls)
 
     # Get the relevant LCS matrices.
@@ -134,8 +135,8 @@ for _ in range(LOOPS):
                             vtype=GRB.CONTINUOUS, name="x_1")
         x_errs = model.addMVar(shape=(LOOKAHEAD, 2*n), lb=-np.inf, ub=np.inf,
                                 vtype=GRB.CONTINUOUS, name="x_err_1")
-        us = model.addMVar(shape=(LOOKAHEAD, 1), lb=0, ub=INPUT_LIMIT,
-                            vtype=GRB.CONTINUOUS, name="u_0")
+        us = model.addMVar(shape=(LOOKAHEAD, 2), lb=-INPUT_LIMIT,
+                           ub=INPUT_LIMIT, vtype=GRB.CONTINUOUS, name="u_0")
         lambdas = model.addMVar(shape=(LOOKAHEAD, p*(k_friction+2)),
                                 lb=-np.inf, ub=np.inf,
                                 vtype=GRB.CONTINUOUS, name="lambda_0")
@@ -147,6 +148,7 @@ for _ in range(LOOPS):
         obj = 0
         for i in range(LOOKAHEAD):
             obj += x_errs[i, :] @ Q @ x_errs[i, :]
+            obj += us[i, :] @ R @ us[i, :]
         model.setObjective(obj, GRB.MINIMIZE)
 
         # Build constraints.
@@ -165,6 +167,14 @@ for _ in range(LOOPS):
         model.addConstrs(
             (ys[i,:] == G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
              for i in range(LOOKAHEAD)), name="output")
+        model.addConstrs(
+            (us[i,0] >= 0 for i in range(LOOKAHEAD)), name="friction_cone_1")
+        model.addConstrs(
+            (-MU_CONTROL*us[i,0] <= us[i,1] \
+             for i in range(LOOKAHEAD)), name="friction_cone_2")
+        model.addConstrs(
+            (us[i,1] <= MU_CONTROL*us[i,0] \
+             for i in range(LOOKAHEAD)), name="friction_cone_2")
 
         # -> Option 1:  Big M method (convex).
         if USE_BIG_M:
@@ -200,9 +210,13 @@ for _ in range(LOOPS):
         pdb.set_trace()
 
     # Then use the first control input to apply to the real system, doing a
-    # zero-order hold with the trajectory optimization's output.  Use a max() to
-    # ensure the control input isn't negative (can happen due to numerics).
-    control_input = max(us.X[0], np.array([0.]))
+    # zero-order hold with the trajectory optimization's output.  Clip the
+    # control input to enforce it is within feasible bounds (slight
+    # infeasibility is possible due to numerics).
+    control_input = us.X[0]
+    control_input = np.clip(control_input,
+                            [0, -MU_CONTROL*max(0, control_input[0])],
+                            [np.inf, MU_CONTROL*max(0, control_input[0])])
     for _ in range(T_MULTIPLE):
         sim_system.step_dynamics(control_input)
 
@@ -211,7 +225,7 @@ for _ in range(LOOPS):
     x_i = lcs._convert_system_state_to_lcs_state(latest_sys_state)
 
     # Save the control input and objective cost.
-    inputs = np.hstack((inputs, control_input))
+    inputs = np.vstack((inputs, control_input))
     costs = np.hstack((costs, model.ObjVal))
 
     # Record the loop time.
@@ -225,9 +239,9 @@ controls = sim_system.control_history
 pdb.set_trace()
 
 # Generate a plot of the simulated rollout.
-title = "Non-convex Trajectory Optimization" if USE_NON_CONVEX else \
-        "Big M Trajectory Optimization"
-file_title = 'traj_opt' if USE_NON_CONVEX else 'traj_opt_M'
+title = "Non-convex Trajectory Optimization, 2D Force" if USE_NON_CONVEX else \
+        "Big M Trajectory Optimization, 2D Force"
+file_title = 'traj_opt_2d' if USE_NON_CONVEX else 'traj_opt_2d_M'
 vis_utils.traj_plot(states, controls, file_title, save=SAVE_OUTPUT, costs=costs,
                     times=times, title=title)
 
