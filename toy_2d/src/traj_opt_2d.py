@@ -51,10 +51,10 @@ DT_SIM = 0.002
 T_MULTIPLE = 50
 DT_TRAJ_OPT = DT_SIM * T_MULTIPLE
 MU_GROUND = 0.5
-MU_CONTROL = 0.3
+MU_CONTROL = 1.
 M1 = 1e3
 M2 = 1e3
-LOOPS = 20
+LOOPS = 35
 INPUT_LIMIT = 5.
 LOOKAHEAD = 4
 USE_BIG_M = False
@@ -62,8 +62,8 @@ USE_NON_CONVEX = not USE_BIG_M
 SAVE_OUTPUT = False
 
 # Contact location and direction.
-CONTACT_LOC = np.array([-1, 1])
-CONTACT_ANGLE = 0.
+CONTACT_LOC = np.array([1, 1])
+CONTACT_ANGLE = -np.pi/2
 
 # Initial and goal conditions, in order of vx, vy, vth, x, y, th.  The optimal
 # trajectory will involve pivoting the cube about its bottom right corner until
@@ -99,7 +99,7 @@ p = polytope.n_contacts
 k_friction = polytope.n_friction
 
 # Build Q and R matrices.
-Q = np.diag([0.1, 0.1, 0.1, 1., 1., 1.])
+Q = np.diag([0.1, 0.1, 0.5, 1., 1., 1.])
 R = np.diag([0.00003, 0.00003])
 
 # Set the initial state of the system.
