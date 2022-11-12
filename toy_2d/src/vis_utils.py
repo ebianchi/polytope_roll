@@ -131,7 +131,7 @@ def traj_plot(states, controls, plot_name, save=False, costs=None, times=None,
     ax3 = fig.add_subplot(325)
     ax3.plot(fx, label='f_x')
     ax3.plot(fy, label='f_y')
-    ax3.plot(force_mag, label='force_mag')
+    ax3.plot(force_mag, linewidth=3, alpha=0.4, label='force_mag')
     ax3.set_ylabel('Force')
     ax3.legend()
     ax3.set_xlabel('Timesteps')
