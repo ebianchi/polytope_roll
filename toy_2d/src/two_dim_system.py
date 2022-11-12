@@ -372,3 +372,94 @@ class TwoDSystemMagOnly(TwoDimensionalSystem):
 
         # Return [fx, fy, loc_x, loc_y].
         return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
+
+
+class TwoDSystemForceOnly(TwoDimensionalSystem):
+    """An extension of the TwoDimensionalSystem that assumes the body-frame
+    control contact location, but not direction, is fixed.  This amendment only
+    requires adapting self.get_map_from_controls_to_gen_coordinates() and
+    self.get_full_controls(), which are assisted by keeping track of the body-
+    frame location and nominal direction in new properties outlined below.
+
+    Properties:
+        contact_point:  Location (given as (2,) x,y numpy array) in body-frame
+                        of the control contact force.
+        contact_angle:  Nominal direction (given as an angle) in body-frame of
+                        the control contact normal force.
+    """
+    params: TwoDimensionalSystemParams
+    contact_point: np.array
+    contact_angle: float
+
+    def __init__(self, params: TwoDimensionalSystemParams,
+                 contact_point: np.array, contact_angle: float):
+        # Do some checks that the contact point and contact direction make
+        # sense.
+        contact_point = contact_point.squeeze()
+        assert contact_point.shape == (2,)
+        assert type(contact_angle) == float
+
+        # Initialize the underlying TwoDimensionalSystem.
+        super().__init__(params)
+
+        # Save the contact point and contact angle.
+        self.contact_point = contact_point
+        self.contact_angle = contact_angle
+
+    def get_map_from_controls_to_gen_coordinates(self, state, _controls):
+        """Given controls as a (2,) vector corresponding to a magnitude of
+        force in the normal and tangential directions, find the (3,2) linear map
+        that will convert it into a generalized force vector corresponding to
+        [fx, fy, torque]."""
+
+        # First, the x and y components of the force just depend on the angle
+        # of the vector.
+        theta = state[4]
+        body_angle = self.contact_angle
+        world_angle = body_angle + theta
+
+        # The torque additionally depends on the body-frame contact location.
+        lever_x, lever_y = self.contact_point[0], self.contact_point[1]
+
+        # Build the expression.
+        gen_normal = np.array([[np.cos(world_angle)],
+                               [np.sin(world_angle)],
+                               [lever_x * np.sin(body_angle) - \
+                                lever_y * np.cos(body_angle)]])
+        gen_tangential = np.array([[-np.sin(world_angle)],
+                                   [np.cos(world_angle)],
+                                   [lever_y * np.sin(body_angle) + \
+                                    lever_x * np.cos(body_angle)]])
+
+        return np.hstack((gen_normal, gen_tangential))
+
+    def get_full_controls(self, state, controls):
+        """Given controls as a (2,) vector corresponding to a magnitude of
+        force, find the (1,4) controls corresponding to [fx, fy, loc_x, loc_y]
+        to be stored in the control history."""
+
+        x, y, theta = state[0], state[2], state[4]
+
+        # Get the control input as a single number.
+        assert controls.shape == (2,)
+        fn, ft = controls[0], controls[1]
+
+        # First, the x and y components of the force just depend on the angle
+        # of the vector.
+        angle = self.contact_angle + theta
+        fx = fn*np.cos(angle) - ft*np.sin(angle)
+        fy = fn*np.sin(angle) + ft*np.cos(angle)
+
+        # The location of the force depends on the location of the system as
+        # well as the relative location of the contact location.
+        dx_body_frame = self.contact_point[0]
+        dy_body_frame = self.contact_point[1]
+
+        dx_world = dx_body_frame*np.cos(theta) - dy_body_frame*np.sin(theta)
+        dy_world = dx_body_frame*np.sin(theta) + dy_body_frame*np.cos(theta)
+
+        loc_x = x + dx_world
+        loc_y = y + dy_world
+
+        # Return [fx, fy, loc_x, loc_y].
+        return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
