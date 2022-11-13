@@ -20,7 +20,7 @@ FORCE_SCALING = 1.  # Scaling factor for viewing forces.
 
 """Make and save a gif of the polytope's state trajectory."""
 def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
-                           save=False, force_scale=1.):
+                           save=False, force_scale=1., title=None):
     # Subsample the states and controls to get 10 samples per second of
     # simulated data.
     step = int(0.1/dt)
@@ -29,6 +29,7 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
 
     plt.ion()
     fig = plt.figure()
+    fig.suptitle(title)
     ax = fig.add_subplot(111)
 
     xs, ys = states[:, 0], states[:, 2]
