@@ -1,8 +1,8 @@
 """This file attempted to formulate a mixed-integer optimization problem of the
 form:
 
-           min         sum_{k=0}^{N-1} x_k^T Q x_k + u_k^T R u_k + sl_k^T S sl_N
-    x_k, lambda_k, u_k
+           min         sum_{k=0}^{N-1} (x_k-x_goal)^T Q (x_k-x_goal) \
+    x_k, lambda_k, u_k                 + u_k^T R u_k + x_k^T S x_k
 
         such that   x_{k+1} = A x_k + B u_k + C lambda_k + d
                     M_1 s_k >= G x_k + H u_k + J lambda_k + l >= 0
@@ -12,16 +12,14 @@ form:
                     x_0 = x(0)
 
 ...where the mixed integer portion is contained in the p*(k+2) vector of binary
-variables, s_k.  The vectors sl_k represent the amount of "slip" happening at
-that timestep.  The scalars M_1 and M_2 should be large numbers (used for the
-big M method).  Here we should note that the above formulation will want to send
-the system to x_N = 0.  For a different goal position, switch the x_k's above to
-(x_k - x^*) for some goal x^*.
+variables, s_k.  The matrix S, when used as a norm on the current state vector,
+penalizes any slip that is apparent in the state's velocity terms.  The scalars
+M_1 and M_2 should be large numbers (used for the big M method).
 
 However, another option is the following (non-convex) formulation:
 
-           min         sum_{k=0}^{N-1} x_k^T Q x_k + u_k^T R u_k + sl_k^T S sl_N
-    x_k, lambda_k, u_k
+           min         sum_{k=0}^{N-1} (x_k-x_goal)^T Q (x_k-x_goal) \
+    x_k, lambda_k, u_k                 + u_k^T R u_k + x_k^T S x_k
 
         such that   x_{k+1} = A x_k + B u_k + C lambda_k + d
                     y_k = G x_k + H u_k + J lambda_k + l >= 0
@@ -53,6 +51,7 @@ from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 DT_SIM = 0.002
 T_MULTIPLE = 50
 DT_TRAJ_OPT = DT_SIM * T_MULTIPLE
+HALF_FREQ = True
 MU_GROUND = 0.4
 MU_CONTROL = 1.
 M1 = 1e3
@@ -104,10 +103,12 @@ n = polytope.n_config
 p = polytope.n_contacts
 k_friction = polytope.n_friction
 
-# Build Q, R, and S matrices.
+# Build Q, R, and S matrices.  S_base is the amount to penalize slip in the x
+# and y velocity directions.  It will get augmented as S = V.T @ S_base @ V for
+# a state-dependent V to map directly from state to slip.
 Q = np.diag([0.1, 0.1, 0.8, 1., 1., 1.])
 R = np.diag([0.003, 0.003])
-S = np.diag([0., 0.])
+S_base = np.diag([0., 0.])
 
 if SCENARIOS[SCENARIO] == 'Angular Error':
     pass
@@ -115,7 +116,7 @@ elif SCENARIOS[SCENARIO] == 'Position Error Only':
     Q[5,5] = 0.
 elif SCENARIOS[SCENARIO] == 'Minimum Slip':
     Q[5,5] = 0.
-    S = np.diag([0.3, 0.3])
+    S_base = np.diag([0.3, 0.3])
 
 
 # Set the initial state of the system.
@@ -152,6 +153,10 @@ for _ in range(LOOPS):
     V = np.array([[1., 0., np.sqrt(2)*np.sin(lever_angle), 0., 0., 0.],
                   [0., 1., -np.sqrt(2)*np.sin(lever_angle), 0., 0., 0.]])
 
+    # Get S to penalize the amount of slip, when S is used as the norm of the
+    # current state vector.
+    S = V.T @ S_base @ V
+
     # First calculate the optimal control input for the LCS.
     try:
         # Create a new gurobi model.
@@ -170,8 +175,6 @@ for _ in range(LOOPS):
         ys = model.addMVar(shape=(LOOKAHEAD, p*(k_friction+2)),
                            lb=-np.inf, ub=np.inf,
                            vtype=GRB.CONTINUOUS, name="ys")
-        slips = model.addMVar(shape=(LOOKAHEAD, 2), lb=-np.inf, ub=np.inf,
-                              vtype=GRB.CONTINUOUS, name="slips")
 
         # Set objective:  penalize distance to goal, control input, and slip
         # measurement.
@@ -179,7 +182,7 @@ for _ in range(LOOPS):
         for i in range(LOOKAHEAD):
             obj += x_errs[i, :] @ Q @ x_errs[i, :]
             obj += us[i, :] @ R @ us[i, :]
-            obj += slips[i, :] @ S @ slips[i, :]
+            obj += xs[i, :] @ S @ xs[i, :]
         model.setObjective(obj, GRB.MINIMIZE)
 
         # Build constraints.
@@ -206,8 +209,6 @@ for _ in range(LOOPS):
         model.addConstrs(
             (us[i,1] <= MU_CONTROL*us[i,0] \
              for i in range(LOOKAHEAD)), name="friction_cone_2")
-        model.addConstrs((slips[i,:] == V@xs[i,:] for i in range(LOOKAHEAD)),
-            name="slip_vector")
 
         # -> Option 1:  Big M method (convex).
         if USE_BIG_M:
@@ -253,6 +254,18 @@ for _ in range(LOOPS):
     for _ in range(T_MULTIPLE):
         sim_system.step_dynamics(control_input)
 
+    # If we want to apply control at half the frequency, then apply the second
+    # solved control input.
+    if HALF_FREQ:
+        inputs = np.vstack((inputs, control_input))
+
+        control_input = us.X[1]
+        control_input = np.clip(control_input,
+                                [0, -MU_CONTROL*max(0, control_input[0])],
+                                [np.inf, MU_CONTROL*max(0, control_input[0])])
+        for _ in range(T_MULTIPLE):
+            sim_system.step_dynamics(control_input)
+
     # Get the latest state to use for the next linearization.
     latest_sys_state = sim_system.state_history[-1, :]
     x_i = lcs._convert_system_state_to_lcs_state(latest_sys_state)
@@ -274,11 +287,13 @@ pdb.set_trace()
 # Generate a plot of the simulated rollout.
 blurb = SCENARIOS[SCENARIO]
 short = SCENARIOS_SHORT[SCENARIO]
-title = f"Non-convex Trajectory Optimization, {blurb}, Double Pivot" \
+freq = ', 5Hz' if HALF_FREQ else ''
+f_short = '_5hz' if HALF_FREQ else ''
+title = f"Non-convex Trajectory Optimization, {blurb}, Double Pivot{freq}" \
         if USE_NON_CONVEX else \
-        f"Big M Trajectory Optimization, {blurb}, Double Pivot"
-file_title = f'traj_opt_{short}_double' if USE_NON_CONVEX \
-             else f'traj_opt_{short}_double_M'
+        f"Big M Trajectory Optimization, {blurb}, Double Pivot{freq}"
+file_title = f'traj_opt_{short}_double{f_short}' if USE_NON_CONVEX \
+             else f'traj_opt_{short}_double{f_short}_M'
 vis_utils.traj_plot(states, controls, file_title, save=SAVE_OUTPUT, costs=costs,
                     times=times, title=title)
 
