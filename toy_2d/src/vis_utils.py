@@ -20,7 +20,7 @@ FORCE_SCALING = 1.  # Scaling factor for viewing forces.
 
 """Make and save a gif of the polytope's state trajectory."""
 def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
-                           save=False):
+                           save=False, force_scale=1., title=None):
     # Subsample the states and controls to get 10 samples per second of
     # simulated data.
     step = int(0.1/dt)
@@ -29,6 +29,7 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
 
     plt.ion()
     fig = plt.figure()
+    fig.suptitle(title)
     ax = fig.add_subplot(111)
 
     xs, ys = states[:, 0], states[:, 2]
@@ -57,7 +58,7 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
             locs = locs[0::step]
 
         # scale up the forces so they're more visible
-        forces = forces.copy() * FORCE_SCALING
+        forces = forces.copy() * force_scale
         ctrl = ax.arrow(locs[0,0]-forces[0,0], locs[0,1]-forces[0,1],
                         forces[0,0], forces[0,1],
                         width=0.1, length_includes_head=True)
@@ -134,7 +135,7 @@ def traj_plot(states, controls, plot_name, save=False, costs=None, times=None,
     ax3 = fig.add_subplot(325)
     ax3.plot(fx, label='f_x')
     ax3.plot(fy, label='f_y')
-    ax3.plot(force_mag, label='force_mag')
+    ax3.plot(force_mag, linewidth=3, alpha=0.4, label='force_mag')
     ax3.set_ylabel('Force')
     ax3.legend()
     ax3.set_xlabel('Timesteps')
