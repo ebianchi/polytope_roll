@@ -35,9 +35,17 @@ class iLQR():
         # number of actions
         self.nu = 1
         # Solver parameters
-        self.alpha = 1         
+        self.alpha = 1 
+        self.decay = 0.9
+        self.expected_cost_redug = 0
+        self.expected_cost_redu_gradg = 0
+        self.expected_cost_redu_hessg = 0         
         self.max_iter = 1000
-        self.tol = 1e-4
+        self.tol = 0.05
+        self.states = []
+        self.actions= []
+        self.curr_cost=0
+        self.new_cost=0
 
     def total_cost(self, xx, uu):
         J = sum([self.running_cost(xx[k], uu[k]) for k in range(self.N - 1)])
@@ -115,7 +123,7 @@ class iLQR():
 
         return H
 
-    def forward_pass(self, xx, uu, dd, KK):
+    def forward_pass(self, xx, uu, dd, KK, lr):
         """
         :param xx: list of states, should be length N
         :param uu: list of inputs, should be length N-1
@@ -131,7 +139,7 @@ class iLQR():
 
         # TODO: compute forward pass
         for i in range(self.N-1):
-            utraj[i] = uu[i] + KK[i]@(xtraj[i] - xx[i]) + self.alpha*dd[i]
+            utraj[i] = uu[i] + KK[i]@(xtraj[i] - xx[i]) + lr*dd[i]
             #TO DO
             # xtraj[i+1] = quad_sim.F(xtraj[i], utraj[i], self.dt)
             xtraj[i+1] = self.sim_forward(xtraj[i], utraj[i])
@@ -149,9 +157,45 @@ class iLQR():
         A, B_gen = lcs.get_A_matrix(), lcs.get_B_matrix()
         pmat = lcs.get_P_matrix()
         B = B_gen@pmat
+        C_mat = lcs.get_C_matrix()
+        G_mat = lcs.get_G_matrix()
+        J_mat = lcs.get_J_matrix()
+        H_mat = lcs.get_H_matrix()
+        #access original dynamics to get the original lambdas
+        curr_lam = self.get_lamda(state, action)
+        eps = 1e-3
+        # check if there is a contact at all. if not use the normal dynamics itself as cube is in air
+        if(np.argwhere(curr_lam>eps).shape[0]>0):
+            curr_lam = curr_lam[curr_lam>eps]
+            # print(curr_lam)
+            C_mat = C_mat[:, np.where(curr_lam>eps)[0]]
+            J_mat = J_mat[:, np.where(curr_lam>eps)[0]]
+            J_pinv = np.linalg.pinv(J_mat)
+            A_d, B_d = -C_mat@J_pinv@G_mat, -C_mat@J_pinv@H_mat@pmat
+            A, B = A + A_d, B+B_d
+            
+
+
+
+        # print(np.where(curr_lam>eps)[0])
+        # print(curr_lam[curr_lam>eps])
+        # print(A.shape, B.shape)
+        # import sys
+        # sys.exit()
+
+        # print(C_mat.shape)
+        # print("dklsvn")
+
         # B = self.convert_gen_to_force(state, action, B_gen)
 
         return A,B
+    
+    def get_lamda(sels, state, action):
+        system.set_initial_state(state)
+        system.step_dynamics(action)
+        return system.lambda_history[-1,:]
+
+
     
     
     # def convert_gen_to_force(self, state, action, B_gen):
@@ -183,10 +227,12 @@ class iLQR():
         """
         dd = [np.zeros((self.nu,))] * (self.N - 1)
         KK = [np.zeros((self.nu, self.nx))] * (self.N - 1)
-        import sys
         # TODO: compute backward pass
         V_xp1 = np.zeros((self.nx)) #jacobian of value func at the next state
         V_xxp1 = np.zeros((self.nx, self.nx)) #hess of value func at the next state
+        expected_cost_redu = 0
+        expected_cost_redu_grad = 0
+        expected_cost_redu_hess = 0
         for i in range(self.N-1,-1,-1):
             # print(i)
             state = xx[i]
@@ -212,13 +258,24 @@ class iLQR():
             Q_ux = B.T@V_xxp1@A #(2,6)
             Q_x = l_x + A.T@V_xp1
             Q_xx = l_xx + A.T@V_xxp1@A
-            KK[i] = -np.linalg.inv(Q_uu)@Q_ux #(2,6)
-            dd[i] = -np.linalg.inv(Q_uu)@Q_u #(2,)
+            KK_curr = -np.linalg.inv(Q_uu)@Q_ux
+            dd_curr = -np.linalg.inv(Q_uu)@Q_u
+            KK[i] =  KK_curr#(2,6)
+            dd[i] =  dd_curr #(2,)
             # KK[i] = -np.linalg.solve(Q_uu,Q_ux) #(2,6)
             # dd[i] = -np.linalg.solve(Q_uu,Q_u) #(2,)
-
+            curr_cost_red_grad = -Q_u@(dd_curr)
+            curr_cost_red_hess = 0.5*(dd_curr.T@Q_uu@dd_curr)
+            curr_tot_red = curr_cost_red_grad+curr_cost_red_hess
+            expected_cost_redu +=curr_tot_red
+            expected_cost_redu_grad+= curr_cost_red_grad
+            expected_cost_redu_hess+=curr_cost_red_hess
+            
             V_xp1 = Q_x - KK[i].T@Q_uu@dd[i]
             V_xxp1 = Q_xx - KK[i].T@Q_uu@KK[i]
+        self.expected_cost_redu_gradg = expected_cost_redu_grad
+        self.expected_cost_redu_hessg = expected_cost_redu_hess
+        self.expected_cost_redug = expected_cost_redu
         return dd, KK
 
     def sim_forward(self, state, action):
@@ -230,9 +287,10 @@ class iLQR():
         # control_vec = control_mag * np.array([-np.cos(ang), -np.sin(ang)])
         # controls = np.hstack((control_vec, control_loc))
         # system.step_dynamics(control_vec, control_loc)
-        controls = action
-        system.step_dynamics(controls)
+        system.step_dynamics(action)
         next_state = system.state_history[-1,:]
+        # lams = system.lambda_history[-1,:]
+        # pdb.set_trace()
         return next_state
 
     def animate(self, init_state, controls, show_vis=False):
@@ -267,7 +325,7 @@ class iLQR():
 
         # Generate a gif of the simulated rollout.
         vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
-            controls=(control_forces, control_locs), save=False)     
+            controls=(control_forces, control_locs), save=True)     
 
     def save_contols(self, controls, iter):
         file_name = "controls"
@@ -289,38 +347,78 @@ class iLQR():
         """
         print(self.N)
         assert (len(uu_guess) == self.N - 1)
-
+        ini_state = x
         # Get an initial, dynamically consistent guess for xx by simulating the cube
         # system.set_initial_state(x)
-        xx = [x]
+        self.states = [ini_state]
+        self.actions = uu_guess
         for k in range(self.N-1):
-            nxt_state = self.sim_forward(xx[k], uu_guess[k])
-            xx.append(nxt_state)
+            nxt_state = self.sim_forward(self.states[k], self.actions[k])
+            self.states.append(nxt_state)
 
-
-        Jprev = np.inf
-        Jnext = self.total_cost(xx, uu_guess)
-        uu = uu_guess
-        KK = None
+        self.curr_cost = self.total_cost(self.states, self.actions)
 
         i = 0
-        print(f'first cost: {Jnext}')
-        while np.abs(Jprev - Jnext) > self.tol and i < self.max_iter:
-            dd, KK = self.backward_pass(xx, uu)
+        print(f'first cost: {self.curr_cost}')
+        while i < self.max_iter:
+            dd, KK = self.backward_pass(self.states, self.actions)
+            # self.animate(ini_state, uu, show_vis=True)
+
+            # if(self.expected_cost_redug<0.01):
+            #     print("expc done")
+            #     break
+
             # print(np.array(dd).shape, np.array(KK).shape)
-            xx, uu = self.forward_pass(xx, uu, dd, KK)
 
-            Jprev = Jnext
-            Jnext = self.total_cost(xx, uu)
+            # Jprev = Jnext
+
+            # lr = 1
+            # while(lr>=0.05):
+            #     xx_new, uu_new = self.forward_pass(self.states, self.actions, dd, KK, lr)
+            #     # self.animate(ini_state, uu_new, show_vis=True)
+            #     self.new_cost = self.total_cost(xx_new, uu_new)
+            #     cost_diff = self.new_cost - self.curr_cost
+            #     print(cost_diff)
+            #     cost_redu_exp = lr*self.expected_cost_redu_gradg + lr**2*self.expected_cost_redu_hessg
+            #     armijo_flag = cost_diff/cost_redu_exp > 0.01
+            #     if(armijo_flag):
+            #         self.curr_cost =self.new_cost 
+            #         self.states = xx_new
+            #         self.actions = uu_new
+            #         print("ok done")
+
+            #         break
+            #     else:
+            #         lr *=self.decay
+            #         print("Lr decreased")
+            # # print(Jprev,Jnext)
+            # if(lr<0.05):
+            #     print("Step size has become too small to move. Ending opti") 
+            #     break
+
+            self.states, self.actions = self.forward_pass(self.states, self.actions, dd, KK, self.alpha )
+            self.curr_cost =self.new_cost
+            self.new_cost = self.total_cost(self.states, self.actions)  
+
+            cost_diff = self.new_cost - self.curr_cost 
+            if(cost_diff<0):
+                print("LR DECREASED")
+                # self.alpha *= self.decay    
+            # if np.abs(Jprev - Jnext) < self.tol:
+            #     print("Converged to optimal")
+            #     break
+
+
+
             i += 1
-            if(i%20==0 and i >1):
-                print(f'cost: {Jnext}')
-                self.save_contols(uu, i)
-                self.animate(x, uu, show_vis=True)
+            if(i%2==0 and i >1):
+                print(f'cost: {self.curr_cost}')
+                self.save_contols(self.actions, i)
+                self.animate(ini_state, self.actions, show_vis=True)
 
-        print(f'Converged to cost {Jnext}')
-        self.animate(x, uu, show_vis=True)
-        return xx, uu, KK
+        print(f'Converged to cost {self.curr_cost}')
+        self.animate(ini_state, self.actions, show_vis=True)
+        return self.states, self.actions, KK
 
 
 
@@ -333,7 +431,7 @@ RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 # Polytope properties
 MASS = 1
 MOM_INERTIA = 0.1
-MU_GROUND = 1e6
+MU_GROUND = 1000
 
 # Control properties
 MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
@@ -383,20 +481,19 @@ lcs = TwoDSystemLCSApproximation(system)
 x0 = np.array([0, 0, 1.0, 0, 0, 0])
 x_goal = np.array([2.0, 0, 1.0, 0, -np.pi/2, 0])
 Q = np.eye(6)
-Q[1,1]=Q[1,1]*10
-Q[3,3]=Q[3,3]*10
-Q[5,5]=Q[5,5]*10
-# Q[0,0]=Q[0,0]*10
-Qf = np.eye(6)*10
+Q[1,1]=Q[1,1]*0
+Q[3,3]=Q[3,3]*0
+Q[5,5]=Q[5,5]*0
+Qf = np.eye(6)*100
 # Qf[1,1]=0
 # Qf[3,3]=0
 # Qf[5,5]=0
-R = np.eye(1)*0
+R = np.eye(1)*0.1
 # R = np.zeros((2,2))
 
-N = 1200
-u_guess = np.ones((N-1,1))*5
-load = True
+N = 2000
+u_guess = np.ones((N-1,1))*6
+load = True  
 if(load):
     file_name = "controls"
     path = f'{file_utils.OUT_DIR}/{file_name}.txt'

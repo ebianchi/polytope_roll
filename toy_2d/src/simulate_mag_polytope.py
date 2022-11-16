@@ -40,7 +40,7 @@ DT = 0.002          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
+x0 = np.array([0, 0, 1.5, 0, -np.pi/6, 0])
 states = x0.reshape(1, 6)
 
 
@@ -67,9 +67,24 @@ system = TwoDSystemMagOnly(system_params, CONTACT_LOC, CONTACT_ANGLE)
 system.set_initial_state(x0)
 for _ in range(1250):
     # Apply a force -- only the magnitude is necessary for specification.
-    control = np.array([0.3])
+    control = np.array([0.5])
 
     system.step_dynamics(control)
+    state = system.state_history[-1,:]
+    x, y, theta = state[0], state[2], state[4]
+    v_loc = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
+    arrint = []
+    for k in range(4):
+        corner_body = v_loc[k, :]
+        phi = np.arctan2(corner_body[1], corner_body[0])
+        # print(phi)
+        if(k==0 or k==3):
+            arrint.append(phi*(theta+y))
+        else:
+            arrint.append(phi*(theta+y))
+    print(arrint)
+    print(polytope.get_phi(state))
+
 
 # Collect the state and control histories.
 states = system.state_history
@@ -79,7 +94,7 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 pdb.set_trace()
 
 # Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, 'simulated_mag_traj', save=True)
+# vis_utils.traj_plot(states, controls, 'simulated_mag_traj', save=True)
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
