@@ -103,7 +103,6 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
     for filename in set(filenames):
         os.remove(filename)
 
-
 """Make and save plots of a system's state and control history."""
 def traj_plot(states, controls, plot_name, save=False, costs=None, times=None,
               title=""):

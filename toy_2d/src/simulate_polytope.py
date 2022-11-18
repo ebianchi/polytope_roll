@@ -24,7 +24,7 @@ RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 
 # Polytope properties
 MASS = 1
-MOM_INERTIA = 0.1
+MOM_INERTIA = 0.01
 MU_GROUND = 0.3
 
 # Control properties
