@@ -87,7 +87,6 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
         filename = f'{file_utils.TEMP_DIR}/{i+1}.png'
         plt.savefig(filename)
         filenames.append(filename)
-        time.sleep(0.05)
 
     if save:
         gif_file = f'{file_utils.OUT_DIR}/{gif_name}.gif'
@@ -103,8 +102,7 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
 
     for filename in set(filenames):
         os.remove(filename)
-        
-    plt.close()
+
 
 """Make and save plots of a system's state and control history."""
 def traj_plot(states, controls, plot_name, save=False, costs=None, times=None,

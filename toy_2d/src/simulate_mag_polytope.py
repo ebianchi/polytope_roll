@@ -71,20 +71,6 @@ for _ in range(1250):
 
     system.step_dynamics(control)
     state = system.state_history[-1,:]
-    x, y, theta = state[0], state[2], state[4]
-    v_loc = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
-    arrint = []
-    for k in range(4):
-        corner_body = v_loc[k, :]
-        phi = np.arctan2(corner_body[1], corner_body[0])
-        # print(phi)
-        if(k==0 or k==3):
-            arrint.append(phi*(theta+y))
-        else:
-            arrint.append(phi*(theta+y))
-    print(arrint)
-    print(polytope.get_phi(state))
-
 
 # Collect the state and control histories.
 states = system.state_history
@@ -94,7 +80,7 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 pdb.set_trace()
 
 # Generate a plot of the simulated rollout.
-# vis_utils.traj_plot(states, controls, 'simulated_mag_traj', save=True)
+vis_utils.traj_plot(states, controls, 'simulated_mag_traj', save=True)
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'square', DT,

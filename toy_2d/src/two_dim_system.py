@@ -265,7 +265,6 @@ class TwoDimensionalSystem:
         the current state and control location."""
 
         controls = controls.squeeze()
-        # print(controls.shape)
         assert controls.shape == (4,)
 
         # Grab the current state and control location for linearization.
