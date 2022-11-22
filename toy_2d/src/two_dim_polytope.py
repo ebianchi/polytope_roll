@@ -17,6 +17,8 @@ import numpy as np
 import pdb
 import sympy
 
+from scipy.spatial import ConvexHull
+
 
 @dataclass
 class TwoDimensionalPolytopeParams:
@@ -33,14 +35,17 @@ class TwoDimensionalPolytope:
     height y=0 in the scene and no other objects.
 
     Properties:
-        params:      2D polytope parameters, including geometry, friction, and
-                     inertia.
-        n_contacts:  The number of vertices of the polytope.
-        n_config:    The number of quantities in the state configuration (this
-                     is necessarily 3 for x, y, th).
-        n_friction:  The number of friction polyhedron sides (this is
-                     necessarily 2 for +/- x directions).
-        n_dims:      The dimension of the problem (this is necessarily 2).
+        params:         2D polytope parameters, including geometry, friction,
+                        and inertia.
+        hull_vertices:  A pared down array of vertices consisting of the convex
+                        hull of the polytope, in clockwise order, stored as a
+                        numpy array of size (n_contacts, 2) for [x, y] location.
+        n_contacts:     The number of vertices of the polytope's convex hull.
+        n_config:       The number of quantities in the state configuration
+                        (this is necessarily 3 for x, y, th).
+        n_friction:     The number of friction polyhedron sides (this is
+                        necessarily 2 for +/- x directions).
+        n_dims:         The dimension of the problem (this is necessarily 2).
     """
     params: TwoDimensionalPolytopeParams
     n_contacts: int
@@ -51,10 +56,16 @@ class TwoDimensionalPolytope:
     def __init__(self, params: TwoDimensionalPolytopeParams):
         self.params = params
 
+        # Compute the convex hull of the polytope for more efficient simulation
+        # later and for easier control.
         vertex_locations = self.params.vertex_locations
-        self.n_contacts = vertex_locations.shape[0]
+        hull_vertices = self.__get_convex_hull_vertices(vertex_locations)
+
+        # Save the convex hull.
+        self.hull_vertices = hull_vertices
 
         # This class represents two dimensional problems.
+        self.n_contacts = hull_vertices.shape[0]
         self.n_config = 3
         self.n_friction = 2
         self.n_dims = 2
@@ -62,38 +73,67 @@ class TwoDimensionalPolytope:
         # Set up a Jacobian function for later calculation of contact Jacobians.
         self.jac_func = self.__set_up_contact_jacobian_function()
 
-    def get_vertex_locations_world(self, state):
+    def __get_convex_hull_vertices(self, vertex_locations):
+        """Compute the convex hull of the provided vertices and return the pared
+        down numpy array of vertices in clockwise order."""
+
+        # Get the convex hull of the vertex locations.
+        convex_hull = ConvexHull(vertex_locations)
+
+        # Return the list in clockwise order.
+        return vertex_locations[np.flip(convex_hull.vertices)]
+
+    def get_vertex_locations_world(self, state, for_visualization=False):
         """Get the locations of the polytope's vertices in world coordinates,
         given the system's current state.  Returns a numpy array of size
-        (n_contacts, 2) for the (x,y) position of each vertex."""
+        (*, 2) for the (x,y) position of each vertex.  The * is either
+        n_contacts if for_visualization is false, or it is equal to the total
+        number of vertices in the potentially nonconvex polytope if
+        for_visualization is true."""
 
         # State is in form [x, dx, y, dy, th, dth].
         x, y, theta = state[0], state[2], state[4]
 
-        p = self.n_contacts
+        # If for visualization purposes, want to include all the vertices.
+        # Otherwise, just include the convex hull vertices.
+        vertices = self.params.vertex_locations if for_visualization else \
+                   self.hull_vertices
+
+        p = vertices.shape[0]
+
         corners_world = np.zeros((p, 2))
 
         for i in range(p):
-            corner_body = self.params.vertex_locations[i, :]
+            corner_body = vertices[i, :]
 
             phi = np.arctan2(corner_body[1], corner_body[0])
             radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
 
             corners_world[i, :] = np.array([x + radius * np.cos(phi + theta),
                                             y + radius * np.sin(phi + theta)])
+
         return corners_world
 
-    def get_vertex_radii_angles(self):
+    def get_vertex_radii_angles(self, for_visualization=False):
         """It may be more convenient in some cases to represent each vertex as a
-        radius and angle instead of as a body-frame x and y offset.  Return the
-        (n_contacts,) numpy arrays of radii and angles."""
+        radius and angle instead of as a body-frame x and y offset.  Return two
+        (*,) numpy arrays of radii and angles.  The * is either n_contacts if
+        for_visualization is false, or it is equal to the total number of
+        vertices in the potentially nonconvex polytope if for_visualization is
+        true."""
 
-        p = self.n_contacts
+        # If for visualization purposes, want to include all the vertices.
+        # Otherwise, just include the convex hull vertices.
+        vertices = self.params.vertex_locations if for_visualization else \
+                   self.hull_vertices
+
+        p = vertices.shape[0]
+
         radii, angles = np.zeros((p,)), np.zeros((p,))
 
         for i in range(p):
-            px = self.params.vertex_locations[i, 0]
-            py = self.params.vertex_locations[i, 1]
+            px = vertices[i, 0]
+            py = vertices[i, 1]
 
             radii[i] = np.sqrt(px**2 + py**2)
             angles[i] = np.arctan2(py, px)
@@ -114,7 +154,7 @@ class TwoDimensionalPolytope:
         corner_velocities = np.zeros((p, 2))
 
         for i in range(p):
-            corner_body = self.params.vertex_locations[i, :]
+            corner_body = self.hull_vertices[i, :]
 
             radius, phi = radii[i], angles[i]
 
@@ -175,7 +215,7 @@ class TwoDimensionalPolytope:
 
         # We can use the contact Jacobian function for each vertex.
         for vertex_i in range(p):
-            px_body, py_body = self.params.vertex_locations[vertex_i, :]
+            px_body, py_body = self.hull_vertices[vertex_i, :]
 
             jac = self.jac_func(px_body, py_body, theta, vx, vy, vth)
 
