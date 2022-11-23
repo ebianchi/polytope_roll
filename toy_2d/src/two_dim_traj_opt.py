@@ -90,11 +90,7 @@ class TwoDTrajectoryOptimization:
            optimization problem constraints in
            self._set_up_optimization_problem().
 
-        2. This expects the underlying polytope to be a square with a half width
-           of 1.  The location where this comes into play is in the calculation
-           of the V matrix in self._get_lcs_plus_terms().
-
-        3. This expects states to be in the same format as the LCS state
+        2. This expects states to be in the same format as the LCS state
            vectors, namely [vx, vy, vth, x, y, th].
 
     Properties:
@@ -239,11 +235,14 @@ class TwoDTrajectoryOptimization:
         """Given a current state, return all of the LCS and control vectors and
         matrices."""
 
-        # For convenience, grab the number of contacts and the control matrices.
+        # For convenience, grab the number of contacts, control matrices, and
+        # the polytope.
         nu = self.n_controls
+        p = self.n_contacts
         Q = self.params.Q
         R = self.params.R
         S_base = self.params.S_base
+        polytope = self.params.sim_system.params.polytope
 
         # Set the LCS initial state and linearization point, both to the current
         # state.
@@ -255,16 +254,23 @@ class TwoDTrajectoryOptimization:
         # Get the relevant LCS matrices.
         A, B, C, d, G, H, J, l, P = self.lcs.get_lcs_terms()
 
-        # Get the matrix V such that V @ x yields the "slip vector".  Note:
-        # this is manually constructed to 1) fit a square polytope with half
-        # width of 1 (e.g., this would not be valid if the polytope had a
-        # different half width or if it were not square), and to 2) assume the
-        # pivot corner is the bottom left (e.g., this would not be valid if the
-        # goal position was to the right of the initial state).
-        theta = q[2]
-        lever_angle = np.pi/4 + (theta % (np.pi/2))
-        V = np.array([[1., 0., np.sqrt(2)*np.sin(lever_angle), 0., 0., 0.],
-                      [0., 1., -np.sqrt(2)*np.cos(lever_angle), 0., 0., 0.]])
+        # To build the V matrix, get the angle between the ground and the
+        # pivoting vertex as well as the index of that vertex.
+        theta_v, pivot_index = polytope.get_theta_v_and_pivot_index_from_theta(
+                                                                        q[2])
+
+        # The lever angle of the center of mass is the ground angle plus the
+        # angle between the convex hull face and the line between the pivot and
+        # the center of mass.
+        lever_angle = theta_v + polytope.gammas[(pivot_index-1) % p]
+
+        # The lever arm is the distance between the pivot and center of mass.
+        radii, _ = polytope.get_vertex_radii_angles()
+        lever_arm = radii[pivot_index]
+
+        # Build the matrix V such that V @ x yields the "slip vector".
+        V = np.array([[1., 0., lever_arm*np.sin(lever_angle), 0., 0., 0.],
+                      [0., 1., -lever_arm*np.cos(lever_angle), 0., 0., 0.]])
 
         # Get S to penalize the amount of slip, when S is used as the norm of the
         # current state vector.
@@ -292,6 +298,9 @@ class TwoDTrajectoryOptimization:
 
         # Create a new gurobi model.
         model = gp.Model("traj_opt")
+
+        # Mute the model (may want to comment this out for debugging).
+        model.setParam('OutputFlag', 0)
 
         # Create variables.
         xs = model.addMVar(shape=(lookahead+1, 2*n), lb=-np.inf, ub=np.inf,
