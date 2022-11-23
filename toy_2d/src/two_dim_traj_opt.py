@@ -262,9 +262,9 @@ class TwoDTrajectoryOptimization:
         # pivot corner is the bottom left (e.g., this would not be valid if the
         # goal position was to the right of the initial state).
         theta = q[2]
-        lever_angle = np.pi/4 + (theta % np.pi/2)
+        lever_angle = np.pi/4 + (theta % (np.pi/2))
         V = np.array([[1., 0., np.sqrt(2)*np.sin(lever_angle), 0., 0., 0.],
-                      [0., 1., -np.sqrt(2)*np.sin(lever_angle), 0., 0., 0.]])
+                      [0., 1., -np.sqrt(2)*np.cos(lever_angle), 0., 0., 0.]])
 
         # Get S to penalize the amount of slip, when S is used as the norm of the
         # current state vector.
