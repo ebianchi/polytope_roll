@@ -6,8 +6,7 @@ The cost we want to minimize is
 
         such that   x_{k+1} = f(x,u) + f(x)*lambda
 
-The state vector is 6-dimensional and the control vector is one dimensional in this case. Given an initial guess,
-the problem first performs a rollout and then uses the backward pass to calculate the new controls by linearizing
+Given an initial guess, the problem first performs a rollout and then uses the backward pass to calculate the new controls by linearizing
 the dynamics and solving the riccati equation. 
 
 During the backward pass, in order to capture the effect of lamda in the linearized dynamics we have,
@@ -33,34 +32,33 @@ import numpy as np
 import pdb
 import matplotlib.pyplot as plt
 import pickle
-
 from toy_2d.src import vis_utils
 from toy_2d.src import file_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                         TwoDimensionalPolytope
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
-                                      TwoDimensionalSystem,TwoDSystemMagOnly
+                                      TwoDimensionalSystem,TwoDSystemMagOnly, TwoDSystemForceOnly
 
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
 
 class iLQR():
 
-    def __init__(self, x_0: np.ndarray, x_goal: np.ndarray, N: int, dt: float, num_states: int, num_controls: int, Q: np.ndarray, R: np.ndarray, Qf: np.ndarray):
-        self.x0 = x0
+    def __init__(self, lcs, x_goal: np.ndarray, N: int, Q: np.ndarray, R: np.ndarray, Qf: np.ndarray):
+        self.lcs = lcs
         self.x_goal = x_goal
-        self.u_goal = np.zeros((num_controls))
+        self.u_goal = np.zeros((R.shape[0]))
         self.N = N
-        self.dt = dt
+        self.dt = lcs.system.params.dt
         self.Q = Q
         self.R = R
         self.Qf = Qf
         # number of states
-        self.nx = num_states
+        self.nx = Q.shape[0]
         # number of actions
-        self.nu = num_controls
+        self.nu = R.shape[0]
         # Solver parameters
-        self.decay = 0.8
+        self.decay = 0.8 #tune this to control decay of learning rate.
         self.max_iter = 1000
         self.tol = 0.05
         self.states = []
@@ -90,8 +88,8 @@ class iLQR():
 
         x_grad = (xk- self.x_goal).T @ self.Q
         u_grad = (uk- self.u_goal).T @ self.R
-        grad[:6] = x_grad
-        grad[6:] = u_grad
+        grad[:self.nx] = x_grad
+        grad[self.nx:] = u_grad
 
         return grad
 
@@ -106,8 +104,8 @@ class iLQR():
         H = np.zeros((self.nx + self.nu, self.nx + self.nu))
 
         # TODO: Compute the hessian
-        H[:6,:6] = self.Q
-        H[6:, 6:] = self.R
+        H[:self.nx,:self.nx] = self.Q
+        H[self.nx:, self.nx:] = self.R
 
         return H
 
@@ -161,37 +159,42 @@ class iLQR():
         # TODO: compute forward pass
         for i in range(self.N-1):
             utraj[i] = uu[i] + KK[i]@(xtraj[i] - xx[i]) + lr*dd[i]
+            # if(utraj[i][0]<0 and utraj[i][1]>0): utraj[i] = np.array([0,0])
+            #TO DO
+            # xtraj[i+1] = quad_sim.F(xtraj[i], utraj[i], self.dt)
             xtraj[i+1] = self.sim_forward(xtraj[i], utraj[i])
         return xtraj, utraj
 
     def get_linearized_discrete_dynamics(self, state, action):
         q = np.array([state[0], state[2], state[4]])
         v = np.array([state[1], state[3], state[5]])
-        lcs.set_linearization_point(q,v, action)
-        A, B_gen = lcs.get_A_matrix(), lcs.get_B_matrix()
-        pmat = lcs.get_P_matrix()
+        self.lcs.set_linearization_point(q,v, action)
+        A, B_gen = self.lcs.get_A_matrix(), self.lcs.get_B_matrix()
+        pmat = self.lcs.get_P_matrix()
         B = B_gen@pmat
-        C_mat = lcs.get_C_matrix()
-        G_mat = lcs.get_G_matrix()
-        J_mat = lcs.get_J_matrix()
-        H_mat = lcs.get_H_matrix()
+        C_mat = self.lcs.get_C_matrix()
+        G_mat = self.lcs.get_G_matrix()
+        J_mat = self.lcs.get_J_matrix()
+        H_mat = self.lcs.get_H_matrix()
         #access original dynamics to get the original lambdas
         curr_lam = self.get_lamda(state, action)
         eps = 1e-3
         # check if there is a contact at all. if not use the normal dynamics itself as cube is in air
         if(np.argwhere(curr_lam>eps).shape[0]>0):
             curr_lam = curr_lam[curr_lam>eps]
+            # print(curr_lam)
             C_mat = C_mat[:, np.where(curr_lam>eps)[0]]
             J_mat = J_mat[:, np.where(curr_lam>eps)[0]]
             J_pinv = np.linalg.pinv(J_mat)
             A_d, B_d = -C_mat@J_pinv@G_mat, -C_mat@J_pinv@H_mat@pmat
             A, B = A + A_d, B+B_d
+
         return A,B
     
-    def get_lamda(sels, state, action):
-        system.set_initial_state(state)
-        system.step_dynamics(action)
-        return system.lambda_history[-1,:]
+    def get_lamda(self, state, action):
+        self.lcs.system.set_initial_state(state)
+        self.lcs.system.step_dynamics(action)
+        return self.lcs.system.lambda_history[-1,:]
 
     def backward_pass(self,  xx, uu):
         """
@@ -204,9 +207,6 @@ class iLQR():
         # TODO: compute backward pass
         V_xp1 = np.zeros((self.nx)) #jacobian of value func at the next state
         V_xxp1 = np.zeros((self.nx, self.nx)) #hess of value func at the next state
-        expected_cost_redu = 0
-        expected_cost_redu_grad = 0
-        expected_cost_redu_hess = 0
         for i in range(self.N-1,-1,-1):
             # print(i)
             state = xx[i]
@@ -218,47 +218,48 @@ class iLQR():
             #TODO
             A,B = self.get_linearized_discrete_dynamics(state, action)
             grad_mat = self.grad_running_cost(state,action)
-            l_x = grad_mat[:6]
-            l_u = grad_mat[6:] 
+            l_x = grad_mat[:self.nx]
+            l_u = grad_mat[self.nx:] 
             hess_mat = self.hess_running_cost(state, action)
-            l_uu = hess_mat[6:, 6:]
-            l_xx = hess_mat[:6,:6]
+            l_uu = hess_mat[self.nx:, self.nx:]
+            l_xx = hess_mat[:self.nx,:self.nx]
             Q_u = l_u + B.T@V_xp1 
             Q_uu = l_uu + B.T@V_xxp1@B 
-            Q_ux = B.T@V_xxp1@A
+            Q_ux = B.T@V_xxp1@A 
             Q_x = l_x + A.T@V_xp1
             Q_xx = l_xx + A.T@V_xxp1@A
             KK_curr = -np.linalg.inv(Q_uu)@Q_ux
             dd_curr = -np.linalg.inv(Q_uu)@Q_u
             KK[i] =  KK_curr
-            dd[i] =  dd_curr 
+            dd[i] =  dd_curr
+            
             V_xp1 = Q_x - KK[i].T@Q_uu@dd[i]
             V_xxp1 = Q_xx - KK[i].T@Q_uu@KK[i]
         return dd, KK
 
     def sim_forward(self, state, action):
-        system.set_initial_state(state)
-        system.step_dynamics(action)
-        next_state = system.state_history[-1,:]
+        self.lcs.system.set_initial_state(state)
+        self.lcs.system.step_dynamics(action)
+        next_state = self.lcs.system.state_history[-1,:]
         return next_state
 
     def animate(self, init_state, controls, show_vis=False):
         # Rollout with a fixed (body-frame) force at one of the vertices.
         x = init_state
         uu = controls
-        system.set_initial_state(x)
+        self.lcs.system.set_initial_state(x)
         for o in range(len(uu)):
-            state = system.state_history[-1, :]
+            state = self.lcs.system.state_history[-1, :]
             if(o==len(uu)-1):
                 print(state)
-            system.step_dynamics(uu[o])
+            self.lcs.system.step_dynamics(uu[o])
 
         # Collect the state and control histories.
-        states = system.state_history
-        controls = system.control_history
+        states = self.lcs.system.state_history
+        controls = self.lcs.system.control_history
         control_forces, control_locs = controls[:, :2], controls[:, 2:]
         # Generate a gif of the simulated rollout.
-        vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
+        vis_utils.animation_gif_polytope(self.lcs.system.params.polytope, states, 'square', self.lcs.system.params.dt,
             controls=(control_forces, control_locs), save=True)     
 
     def save_contols(self, controls, iter):
@@ -277,24 +278,24 @@ class iLQR():
         :return: xx, uu, KK, the input and state trajectory and associated sequence of LQR gains
         """
         assert (len(uu_guess) == self.N - 1)
-        ini_state = x
+        init_state = x
         # Get an initial, dynamically consistent guess for xx by simulating the cube
-        self.states = [ini_state]
+        # system.set_initial_state(x)
+        self.states = [init_state]
         self.actions = uu_guess
         for k in range(self.N-1):
             nxt_state = self.sim_forward(self.states[k], self.actions[k])
             self.states.append(nxt_state)
 
         self.curr_cost = self.total_cost(self.states, self.actions)
-
         i = 0
-        print(f'first cost: {self.curr_cost}')
         cost_arr = []
+        print(f'first cost: {self.curr_cost}')
         while i < self.max_iter:
             dd, KK = self.backward_pass(self.states, self.actions)
-            lr = 1
-            while(lr>=0.05):
-                xx_new, uu_new = self.forward_pass(self.states, self.actions, dd, KK, lr)
+            learning_rate = 1
+            while(learning_rate>=0.05):
+                xx_new, uu_new = self.forward_pass(self.states, self.actions, dd, KK, learning_rate)
                 self.new_cost = self.total_cost(xx_new, uu_new)
                 cost_diff = self.new_cost - self.curr_cost
                 if(cost_diff<0):
@@ -304,10 +305,9 @@ class iLQR():
                     self.actions = uu_new
                     break
                 else:
-                    lr *=self.decay
+                    learning_rate *=self.decay
                     print("Learning rate decreased")
-            # print(Jprev,Jnext)
-            if(lr<0.05):
+            if(learning_rate<0.05):
                 print("Step size has become too small to move. Ending optimization") 
                 break
 
@@ -325,93 +325,9 @@ class iLQR():
                 # plt.show()
 
         print(f'Converged to cost {self.curr_cost}')
-        self.animate(ini_state, self.actions, show_vis=True)
-        return self.states, self.actions, KK
+        self.animate(init_state, self.actions, show_vis=True)
+        # return self.states, self.actions, KK
 
 
-if __name__ == "__main__":
-    # Fixed parameters
-    # A few polytope examples.
-    SQUARE_CORNERS = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
-    STICK_CORNERS = np.array([[1, 0], [-1, 0]])
-    RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 
-    # Polytope properties
-    MASS = 1
-    MOM_INERTIA = 0.1
-    MU_GROUND = 0.1
-
-    # Control properties
-    MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
-                        # this to help define a set of feasible control forces.
-
-    # Simulation parameters.
-    DT = 0.001          # If a generated trajectory looks messed up, it could be
-                        # fixed by making this timestep smaller.
-
-
-    # Create a polytope.
-    poly_params = TwoDimensionalPolytopeParams(
-        mass = MASS,
-        moment_inertia = MOM_INERTIA,
-        mu_ground = MU_GROUND,
-        vertex_locations = SQUARE_CORNERS
-    )
-    polytope = TwoDimensionalPolytope(poly_params)
-
-    # Create a system from the polytope, a simulation timestep, and a control
-    # contact's friction parameter.
-    system_params = TwoDimensionalSystemParams(
-        dt = DT,
-        polytope = polytope,
-        mu_control = MU_CONTROL
-    )
-    # system = TwoDimensionalSystem(system_params)
-
-    # Contact location and direction.
-    CONTACT_LOC = np.array([-1, 1])
-    CONTACT_ANGLE = 0.
-
-    system = TwoDSystemMagOnly(system_params, CONTACT_LOC, CONTACT_ANGLE)
-
-
-    # Create an LCS approximation from the system.
-    lcs = TwoDSystemLCSApproximation(system)
-
-    #Following the hw methodology of implementing ILQR
-    #take the current state and action and give the current cost. Here the cost can be 
-    #non-linear but defining a quadratic cost makes life easier
-
-    # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-    x0 = np.array([0, 0, 1.0, 0, 0, 0])
-    x_goal = np.array([4.0, 0, 1.0, 0, -np.pi/2, 0])
-    Q = np.eye(6)
-    Q[1,1]=Q[1,1]*0
-    Q[3,3]=Q[3,3]*0
-    Q[5,5]=Q[5,5]*0
-    Qf = np.eye(6)*10
-
-    #penalty on using more force. Experience suggests making this zero has bad effects
-    R = np.eye(1)*0.01
-
-    #number of timesteps in gthe rollout
-    num_timesteps = 5000
-    u_guess = np.ones((num_timesteps-1,1))*6
-
-    num_states = 6
-    num_controls = 1
-    
-    #load your previous run answer to get a warm start. Remember, if you change num_timesteps you will
-    #get error loading the previous solution, the timesteps also decide the num of control steps. 
-    #If you run the script with the same num_timesteps (as a previous run) and want to try different cost
-    # make he flag true 
-    load_old_run = False  
-    if(load_old_run):
-        file_name = "controls"
-        path = f'{file_utils.OUT_DIR}/{file_name}.txt'
-        with open (path, 'rb') as fp:
-            u_guess = pickle.load(fp)
-
-    obj = iLQR(x0, x_goal, num_timesteps,DT,num_states,num_controls, Q, R, Qf)
-    obj.calculate_optimal_trajectory(x0, u_guess)
 
