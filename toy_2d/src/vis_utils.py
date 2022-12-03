@@ -41,7 +41,8 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
     ground = plt.fill_between(x=np.arange(min(xs)-5,max(xs)+5,1),
                               y1=0, y2=-1, color='b', alpha=0.2)
     init_state = states[0, :]
-    init_corners = polytope.get_vertex_locations_world(init_state)
+    init_corners = polytope.get_vertex_locations_world(init_state,
+                                                       for_visualization=True)
     poly = Polygon(init_corners, closed=True)
     ax.add_patch(poly)
     corner_dots, = ax.plot(init_corners[:, 0], init_corners[:, 1], 'ro',
@@ -69,7 +70,8 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
 
     for i in range(states.shape[0]):
         new_state = states[i, :]
-        new_corners = polytope.get_vertex_locations_world(new_state)
+        new_corners = polytope.get_vertex_locations_world(new_state,
+                                                         for_visualization=True)
         corner_dots.set_data((new_corners[:, 0], new_corners[:, 1]))
 
         poly.set(xy=new_corners)

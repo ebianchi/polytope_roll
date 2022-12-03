@@ -49,7 +49,7 @@ x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
 # Create a polytope.
 poly_params = TwoDimensionalPolytopeParams(mass = 1, moment_inertia = 0.01,
     mu_ground = 0.3, vertex_locations = np.array([[1, -1], [1, 1], [-1, 1],
-                                                 [-1, -1]]))
+                                                 [-1, -1], [0, -0.5]]))
 polytope = TwoDimensionalPolytope(poly_params)
 
 # Create a system from the polytope, a simulation timestep, and a control

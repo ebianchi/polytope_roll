@@ -18,7 +18,7 @@ from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
 
 # Fixed parameters
 # A few polytope examples.
-SQUARE_CORNERS = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
+SQUARE_CORNERS = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1], [0, -0.5]])
 STICK_CORNERS = np.array([[1, 0], [-1, 0]])
 RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 
