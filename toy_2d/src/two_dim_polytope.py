@@ -25,7 +25,7 @@ class TwoDimensionalPolytopeParams:
     mass: float = 1.0
     moment_inertia: float = 0.1
     mu_ground: float = 1.0
-    vertex_locations: np.array = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
+    vertex_locations: np.array = np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]])
 
 
 class TwoDimensionalPolytope:

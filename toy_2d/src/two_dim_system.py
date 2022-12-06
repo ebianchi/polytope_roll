@@ -435,12 +435,13 @@ class TwoDSystemForceOnly(TwoDimensionalSystem):
 
     def get_full_controls(self, state, controls):
         """Given controls as a (2,) vector corresponding to a magnitude of
-        force, find the (1,4) controls corresponding to [fx, fy, loc_x, loc_y]
-        to be stored in the control history."""
+        force in the normal and tangential directions, find the (1,4) controls
+        corresponding to [fx, fy, loc_x, loc_y] to be stored in the control
+        history."""
 
         x, y, theta = state[0], state[2], state[4]
 
-        # Get the control input as a single number.
+        # Get the control input as normal and tangential forces.
         assert controls.shape == (2,)
         fn, ft = controls[0], controls[1]
 
@@ -463,3 +464,183 @@ class TwoDSystemForceOnly(TwoDimensionalSystem):
 
         # Return [fx, fy, loc_x, loc_y].
         return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
+
+
+class TwoDSystemForceSide(TwoDimensionalSystem):
+    """An extension of the TwoDimensionalSystem that assumes the control contact
+    location resides somewhere on one specified side of the polytope.  The
+    nominal direction of the contact force is defined by the normal of the
+    polytope face, and the force direction otherwise has to satisfy friction
+    cone constraints.  The specified side of the polytope is assumed to be of
+    the original polytope, not its convex hull.  This amendment only requires
+    adapting self.get_map_from_controls_to_gen_coordinates() and
+    self.get_full_controls(), which are assisted by keeping track of the
+    polytope side in the required argument.
+
+    NOTE:  The specified side of the polytope is assumed to be of the original
+    polytope, not its convex hull.  This only works properly if the original
+    polytope's vertex_locations are provided in clockwise order.  It could be a
+    TODO to ensure vertex_locations in the TwoDimensionalPolytope class are
+    automatically stored this way.
+
+    Properties:
+        contact_side:   Polytope side (given as an integer) which the control
+                        force is able to contact.
+        contact_angle:  Nominal direction (given as an angle) in body-frame of
+                        the control contact normal force.  This is not an input
+                        argument, as it is directly calculated based on the
+                        selected contact_side.
+        contact_point:  Location (given as (2,) x,y numpy array) in body-frame
+                        of the control contact force.  This is initialized as
+                        None but changes depending on the control input.
+        vert1:          The contact_side defined as side n is defined by the
+                        polytope's vertices n and n+1.  The nth vertex is stored
+                        as vert1 as a body-frame offset, expressed in body-
+                        frame.
+        vert2:          The contact_side defined as side n is defined by the
+                        polytope's vertices n and n+1.  The (n+1)th vertex is
+                        stored as vert2 as a body-frame offset, expressed in
+                        body-frame.
+    """
+    params: TwoDimensionalSystemParams
+    contact_side: int
+    contact_angle: float
+
+    def __init__(self, params: TwoDimensionalSystemParams,
+                 contact_side: int):
+        # Do some checks that the contact point and contact direction make
+        # sense.
+        assert type(contact_side) == int
+        assert contact_side < params.polytope.params.vertex_locations.shape[0]
+
+        # Initialize the underlying TwoDimensionalSystem.
+        super().__init__(params)
+
+        # Get the vertex locations in body-frame, defining the side, and
+        # calculate the contact angle, based on the polytope side normal.
+        vert1, vert2, contact_angle = self.__calculate_side_and_contact_angle(
+                                                                contact_side)
+
+        # Save the body-frame locations of the vertices defining the side.
+        self.vert1 = vert1
+        self.vert2 = vert2
+
+        # Save the contact side and contact angle.
+        self.contact_side = contact_side
+        self.contact_angle = contact_angle
+
+        # Initialize the contact_point as None.
+        self.contact_point = None
+
+    def __calculate_side_and_contact_angle(self, side):
+        """Given one of the polytope's sides (as an integer, defining side n as
+        the face between vertices n and n+1), return the body-frame locations of
+        vertices n and n+1 as well as calculate the angle of the nominal inward
+        contact normal in body frame."""
+
+        # Get the polytope and total number of vertices for convenience.  Note,
+        # polytope.n_contacts is the number of vertices in the polytope's
+        # convex hull, not the full polytope.  Thus we use the polytope's
+        # vertex_locations instead.
+        polytope = self.params.polytope
+        total_verts = polytope.params.vertex_locations.shape[0]
+
+        # Side n is defined as the face between vertices n and n+1.
+        vert1 = polytope.params.vertex_locations[side, :]
+        vert2 = polytope.params.vertex_locations[(side+1) % total_verts, :]
+
+        dx = vert2[0] - vert1[0]
+        dy = vert2[1] - vert1[1]
+
+        # The slope of the face is dy/dx, and the clockwise vector points along
+        # <dx, dy>.  The slope of the inward normal is -dx/dy, and the inward
+        # normal vector points along <dy, -dx>.
+        inward_normal_vec = np.array([dy, -dx])
+        contact_angle = np.arctan2(inward_normal_vec[1], inward_normal_vec[0])
+
+        return vert1, vert2, contact_angle
+
+    def __update_contact_point(self, controls):
+        """Given controls as a (3,) vector, interpret the third number as an
+        interpolation coefficient between the side's first and second vertex.
+        The interpolation should return vert1 for interp = 0 and vert2 for
+        interp = 1."""
+
+        # Do some quick checks on the controls input.
+        controls = controls.squeeze()
+        assert controls.shape == (3,)
+
+        # Get how far to interpolate vertices 1 and 2, checking that the
+        # interpolation coefficient is in [0, 1].
+        interp = controls[2]
+        assert (interp >= 0) and (interp <= 1)
+
+        # Interpolate between the side's defining vertices.
+        self.contact_point = self.vert1 + interp*(self.vert2 - self.vert1)
+
+    def get_map_from_controls_to_gen_coordinates(self, state, controls):
+        """Given controls as a (3,) vector corresponding to a magnitude of
+        force in the normal and tangential directions plus a float between 0 and
+        1 defining where on the polytope's side the force is acting, find the
+        (3,3) linear map that will convert it into a generalized force vector
+        corresponding to [fx, fy, torque]."""
+
+        # First, the x and y components of the force just depend on the angle
+        # of the vector.
+        theta = state[4]
+        body_angle = self.contact_angle
+        world_angle = body_angle + theta
+
+        # The torque additionally depends on the body-frame contact location,
+        # which can be calculated based on the current contact point location.
+        self.__update_contact_point(controls)
+        lever_x, lever_y = self.contact_point[0], self.contact_point[1]
+
+        # Build the expression.
+        gen_normal = np.array([[np.cos(world_angle)],
+                               [np.sin(world_angle)],
+                               [lever_x * np.sin(body_angle) - \
+                                lever_y * np.cos(body_angle)]])
+        gen_tangential = np.array([[-np.sin(world_angle)],
+                                   [np.cos(world_angle)],
+                                   [lever_y * np.sin(body_angle) + \
+                                    lever_x * np.cos(body_angle)]])
+        gen_interp = np.zeros_like(gen_normal)
+
+        return np.hstack((gen_normal, gen_tangential, gen_interp))
+
+    def get_full_controls(self, state, controls):
+        """Given controls as a (3,) vector corresponding to a magnitude of
+        force in the normal and tangential directions and a float between 0 and
+        1 defining where on the polytope's side the force is acting, find the
+        (1,4) controls corresponding to [fx, fy, loc_x, loc_y] to be stored in
+        the control history."""
+
+        x, y, theta = state[0], state[2], state[4]
+
+        # Get the control input as normal and tangential forces.
+        assert controls.shape == (3,)
+        fn, ft = controls[0], controls[1]
+
+        # First, the x and y components of the force just depend on the angle
+        # of the vector.
+        angle = self.contact_angle + theta
+        fx = fn*np.cos(angle) - ft*np.sin(angle)
+        fy = fn*np.sin(angle) + ft*np.cos(angle)
+
+        # The location of the force depends on the location of the system as
+        # well as the relative location of the contact location, which can be
+        # calculated based on the current contact point location.
+        self.__update_contact_point(controls)
+        dx_body_frame = self.contact_point[0]
+        dy_body_frame = self.contact_point[1]
+
+        dx_world = dx_body_frame*np.cos(theta) - dy_body_frame*np.sin(theta)
+        dy_world = dx_body_frame*np.sin(theta) + dy_body_frame*np.cos(theta)
+
+        loc_x = x + dx_world
+        loc_y = y + dy_world
+
+        # Return [fx, fy, loc_x, loc_y].
+        return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
+
