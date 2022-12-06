@@ -19,11 +19,12 @@ from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
 # Fixed parameters
 # A few polytope examples.
 SQUARE_CORNERS = np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]])
+SQUARE_NOTCH_CORNERS = np.array([[-1, -1], [-1, 1], [0, 0.7], [1, 1], [1, -1]])
 STICK_CORNERS = np.array([[1, 0], [-1, 0]])
 RAND_CORNERS = np.array([[0.5, 0], [0.7, 0.5], [0, 0.8], [-1.2, 0], [0, -0.5]])
 
 # Contact side.
-CONTACT_SIDE = 0
+CONTACT_SIDE = 2
 
 # Polytope properties
 MASS = 1
@@ -48,7 +49,7 @@ poly_params = TwoDimensionalPolytopeParams(
     mass = MASS,
     moment_inertia = MOM_INERTIA,
     mu_ground = MU_GROUND,
-    vertex_locations = SQUARE_CORNERS
+    vertex_locations = SQUARE_NOTCH_CORNERS
 )
 polytope = TwoDimensionalPolytope(poly_params)
 
@@ -68,7 +69,7 @@ for i in range(1250):
     # Apply a force -- give a normal and tangential component as well as an
     # interpolation coefficient between 0 and 1.
     fl = float((1250-i)/1250)
-    control = np.array([3.8, 1.9, fl])
+    control = np.array([5., 4.12, fl])
 
     system.step_dynamics(control)
 
@@ -80,11 +81,11 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 pdb.set_trace()
 
 # Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, 'simulated_side_traj', save=False)
+vis_utils.traj_plot(states, controls, 'simulated_side_notch_traj', save=False)
 
 # Generate a gif of the simulated rollout.
-vis_utils.animation_gif_polytope(polytope, states, 'simulated_side_traj', DT,
-    controls=(control_forces, control_locs), save=False, force_scale=10.)
+vis_utils.animation_gif_polytope(polytope, states, 'simulated_side_notch_traj',
+    DT, controls=(control_forces, control_locs), save=False, force_scale=10.)
 
 pdb.set_trace()
 
