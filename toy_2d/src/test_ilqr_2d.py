@@ -2,6 +2,7 @@
 """
 import numpy as np
 import pdb
+import sys
 import matplotlib.pyplot as plt
 
 from toy_2d.src import vis_utils
@@ -9,11 +10,25 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
                                         TwoDimensionalPolytope
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
                                       TwoDSystemForceOnly
-from toy_2d.src.ilqr import iLQR
+from toy_2d.src.ilqr import iLQR, SolverParams
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
 
 if __name__ == "__main__":
+    # print ("Arguments Provided:", str(sys.argv))
+    test_number = 0
+    if(len(sys.argv) !=2):
+        print("Required arguments not provided")
+        print("Usage: python3 path_to_script/test_ilqr_2d.py test_number")
+        print("test_number should be an integer")
+        sys.exit()
+    else: 
+        try:  
+            test_number = int(sys.argv[1]) 
+        except ValueError:
+            print("Usage: python3 path_to_script/test_ilqr_2d.py test_number")
+            print("test_number should be an integer")
+            sys.exit()
     # Fixed parameters
     # A few polytope examples.
     SQUARE_CORNERS = np.array([[1, -1], [1, 1], [-1, 1], [-1, -1]])
@@ -49,7 +64,11 @@ if __name__ == "__main__":
         polytope = polytope,
         mu_control = MU_CONTROL
     )
-
+    solver_params = SolverParams(
+        decay = 0.95,
+        max_iterations = 1000,
+        tolerance = 0.05
+    )
     # Contact location and direction.
     CONTACT_LOC = np.array([-1, 1])
     CONTACT_ANGLE = 0.
@@ -88,12 +107,12 @@ if __name__ == "__main__":
     # make he flag true 
     load_old_run = False  
     if(load_old_run):
-        file_name = "controls"
+        file_name = "controls" + str(test_number)
         path = f'{file_utils.OUT_DIR}/{file_name}.txt'
         with open (path, 'rb') as fp:
             u_guess = pickle.load(fp)
 
-    obj = iLQR(lcs, x_goal, num_timesteps, Q,R,Qf)
+    obj = iLQR(lcs, x_goal, num_timesteps, test_number, Q,R,Qf, solver_params)
     obj.calculate_optimal_trajectory(x0, u_guess)
 
 

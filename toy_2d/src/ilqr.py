@@ -29,6 +29,7 @@ Substituting this back in original dyanmics eqaution gives us A'' and B'' which 
 """
 
 import numpy as np
+from dataclasses import dataclass, field
 import pdb
 import matplotlib.pyplot as plt
 import pickle
@@ -41,14 +42,35 @@ from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
 
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
+@dataclass
+class SolverParams:
+    decay: float = 0.8
+    max_iterations: int = 1000
+    tolerance: float = 0.05
 
-class iLQR():
+class iLQR:
+    """
+    iLQR class for solving the 1d and 2d force problem 
+    Properties:
+        lcs:                LCS approximation of the system containing the system functionalities 
+                            inherited within
+        x_goal:             final goal point to be reached 
+        N:                  Number of timesteps to solve the problem for before back propagation
+        test_number:        The current test number to be used while saving the outputs
+        Q:                  Running cost on the error with the goal state  
+        R:                  Running cost on the error with the nominal control (zeros in this case)  
+        Qf:                 Final cost on the goal state  
+        solver_params:      params for the iLQR solver including learning rate decay,
+                            maximum iterations before termination, and tolerance
+    """
+    solver_params: SolverParams
 
-    def __init__(self, lcs, x_goal: np.ndarray, N: int, Q: np.ndarray, R: np.ndarray, Qf: np.ndarray):
+    def __init__(self, lcs, x_goal: np.ndarray, N: int, test_number:int, Q: np.ndarray, R: np.ndarray, Qf: np.ndarray, solver_params: SolverParams):
         self.lcs = lcs
         self.x_goal = x_goal
         self.u_goal = np.zeros((R.shape[0]))
         self.N = N
+        self.test_num = test_number
         self.dt = lcs.system.params.dt
         self.Q = Q
         self.R = R
@@ -58,9 +80,9 @@ class iLQR():
         # number of actions
         self.nu = R.shape[0]
         # Solver parameters
-        self.decay = 0.8 #tune this to control decay of learning rate.
-        self.max_iter = 1000
-        self.tol = 0.05
+        self.decay = solver_params.decay #tune this to control decay of learning rate.
+        self.max_iter = solver_params.max_iterations
+        self.tol = solver_params.tolerance
         self.states = []
         self.actions= []
         self.curr_cost=0
@@ -71,7 +93,6 @@ class iLQR():
         return J + self.terminal_cost(xx[-1])
 
     def running_cost(self, xk, uk):
-        # print(uk.shape, self.R.shape)
         lqr_cost = 0.5 * ((xk - self.x_goal).T @ self.Q @ (xk - self.x_goal) +
                           (uk - self.u_goal).T @ self.R @ (uk - self.u_goal))
         return lqr_cost
@@ -83,9 +104,6 @@ class iLQR():
         :return: [∂l/∂xᵀ, ∂l/∂uᵀ]ᵀ, evaluated at xk, uk
         """
         grad = np.zeros((self.nx+self.nu,))
-
-        #TODO: Compute the gradient
-
         x_grad = (xk- self.x_goal).T @ self.Q
         u_grad = (uk- self.u_goal).T @ self.R
         grad[:self.nx] = x_grad
@@ -103,7 +121,6 @@ class iLQR():
         """
         H = np.zeros((self.nx + self.nu, self.nx + self.nu))
 
-        # TODO: Compute the hessian
         H[:self.nx,:self.nx] = self.Q
         H[self.nx:, self.nx:] = self.R
 
@@ -123,8 +140,6 @@ class iLQR():
         """
 
         grad = np.zeros((self.nx))
-
-        # TODO: Compute the gradient
         x_grad = (xf- self.x_goal).T @ self.Qf
         grad = x_grad
         return grad
@@ -137,9 +152,6 @@ class iLQR():
 
         H = np.zeros((self.nx, self.nx))
         H = self.Qf
-
-        # TODO: Compute H
-
         return H
 
     def forward_pass(self, xx, uu, dd, KK, lr):
@@ -156,12 +168,8 @@ class iLQR():
         utraj = [np.zeros((self.nu,))] * (self.N - 1)
         xtraj[0] = xx[0]
 
-        # TODO: compute forward pass
         for i in range(self.N-1):
             utraj[i] = uu[i] + KK[i]@(xtraj[i] - xx[i]) + lr*dd[i]
-            # if(utraj[i][0]<0 and utraj[i][1]>0): utraj[i] = np.array([0,0])
-            #TO DO
-            # xtraj[i+1] = quad_sim.F(xtraj[i], utraj[i], self.dt)
             xtraj[i+1] = self.sim_forward(xtraj[i], utraj[i])
         return xtraj, utraj
 
@@ -169,20 +177,18 @@ class iLQR():
         q = np.array([state[0], state[2], state[4]])
         v = np.array([state[1], state[3], state[5]])
         self.lcs.set_linearization_point(q,v, action)
-        A, B_gen = self.lcs.get_A_matrix(), self.lcs.get_B_matrix()
-        pmat = self.lcs.get_P_matrix()
+        A, B_gen, C_mat, _, G_mat, H_mat, J_mat, _, pmat = self.lcs.get_lcs_terms()
         B = B_gen@pmat
-        C_mat = self.lcs.get_C_matrix()
-        G_mat = self.lcs.get_G_matrix()
-        J_mat = self.lcs.get_J_matrix()
-        H_mat = self.lcs.get_H_matrix()
         #access original dynamics to get the original lambdas
         curr_lam = self.get_lamda(state, action)
         eps = 1e-3
         # check if there is a contact at all. if not use the normal dynamics itself as cube is in air
-        if(np.argwhere(curr_lam>eps).shape[0]>0):
+        #the curr_lam vector is a vector of shape [16,] of which the first 8 are normal, the next 4 
+        #are tangential and the last 4 are slack variables. Hence to see if the cube made contact, we only
+        #check if the tangential or normal values are greater than zero. Slack variables might be non-zero
+        #even with no contact.
+        if(np.argwhere(curr_lam[:12]>eps).shape[0]>0):
             curr_lam = curr_lam[curr_lam>eps]
-            # print(curr_lam)
             C_mat = C_mat[:, np.where(curr_lam>eps)[0]]
             J_mat = J_mat[:, np.where(curr_lam>eps)[0]]
             J_pinv = np.linalg.pinv(J_mat)
@@ -204,18 +210,12 @@ class iLQR():
         """
         dd = [np.zeros((self.nu,))] * (self.N - 1)
         KK = [np.zeros((self.nu, self.nx))] * (self.N - 1)
-        # TODO: compute backward pass
-        V_xp1 = np.zeros((self.nx)) #jacobian of value func at the next state
-        V_xxp1 = np.zeros((self.nx, self.nx)) #hess of value func at the next state
-        for i in range(self.N-1,-1,-1):
-            # print(i)
+        final_state = xx[self.N-1]
+        V_xp1 = self.grad_terminal_cost(final_state) #jacobian of value func at the next state
+        V_xxp1 = self.hess_terminal_cost(final_state) #hess of value func at the next state
+        for i in range(self.N-2,-1,-1):
             state = xx[i]
-            if(i == self.N-1):
-                V_xp1 = self.grad_terminal_cost(state)
-                V_xxp1 = self.hess_terminal_cost(state)
-                continue
             action = uu[i]
-            #TODO
             A,B = self.get_linearized_discrete_dynamics(state, action)
             grad_mat = self.grad_running_cost(state,action)
             l_x = grad_mat[:self.nx]
@@ -243,7 +243,7 @@ class iLQR():
         next_state = self.lcs.system.state_history[-1,:]
         return next_state
 
-    def animate(self, init_state, controls, show_vis=False):
+    def animate(self, init_state, controls):
         # Rollout with a fixed (body-frame) force at one of the vertices.
         x = init_state
         uu = controls
@@ -258,12 +258,13 @@ class iLQR():
         states = self.lcs.system.state_history
         controls = self.lcs.system.control_history
         control_forces, control_locs = controls[:, :2], controls[:, 2:]
+        gif_name = "gif_" + str(self.test_num)
         # Generate a gif of the simulated rollout.
-        vis_utils.animation_gif_polytope(self.lcs.system.params.polytope, states, 'square', self.lcs.system.params.dt,
+        vis_utils.animation_gif_polytope(self.lcs.system.params.polytope, states, gif_name, self.lcs.system.params.dt,
             controls=(control_forces, control_locs), save=True)     
 
-    def save_contols(self, controls, iter):
-        file_name = "controls"
+    def save_contols(self, controls):
+        file_name = "controls_" + str(self.test_num)
         path = f'{file_utils.OUT_DIR}/{file_name}.txt'
         with open(path, 'wb') as fp:
             pickle.dump(controls, fp)
@@ -310,23 +311,23 @@ class iLQR():
             if(learning_rate<0.05):
                 print("Step size has become too small to move. Ending optimization") 
                 break
-
-            i += 1
-            if(i%2==0 and i >1):
+            if(i%10==0 and i >1):
                 print(f'cost: {self.curr_cost}')
-                self.save_contols(self.actions, i)
-                # self.animate(ini_state, self.actions, show_vis=True)
+                self.save_contols(self.actions)
+                # self.animate(ini_state, self.actions)
                 plt.plot(cost_arr)
                 plt.xlabel("Iterations")
                 plt.ylabel("Total Cost")
                 plt.grid()
-                filename = f'{file_utils.OUT_DIR}/plot.png'
+                plot_name = "plot_" + str(self.test_num)
+                filename = f'{file_utils.OUT_DIR}/{plot_name}.png'
                 plt.savefig(filename)
                 # plt.show()
+            i += 1
+            
 
         print(f'Converged to cost {self.curr_cost}')
-        self.animate(init_state, self.actions, show_vis=True)
-        # return self.states, self.actions, KK
+        self.animate(init_state, self.actions)
 
 
 
