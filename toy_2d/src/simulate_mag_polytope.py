@@ -40,7 +40,7 @@ DT = 0.002          # If a generated trajectory looks messed up, it could be
                     # fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
+x0 = np.array([0, 0, 1.5, 0, -1/6 * -np.pi, 0])
 states = x0.reshape(1, 6)
 
 
