@@ -107,7 +107,7 @@ if __name__ == "__main__":
     # make he flag true 
     load_old_run = False  
     if(load_old_run):
-        file_name = "controls" + str(test_number)
+        file_name = "ilqr_controls_" + str(test_number)
         path = f'{file_utils.OUT_DIR}/{file_name}.txt'
         with open (path, 'rb') as fp:
             u_guess = pickle.load(fp)

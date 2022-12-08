@@ -53,15 +53,15 @@ class iLQR:
     iLQR class for solving the 1d and 2d force problem 
     Properties:
         lcs:                LCS approximation of the system containing the system functionalities 
-                            inherited within
-        x_goal:             final goal point to be reached 
-        N:                  Number of timesteps to solve the problem for before back propagation
-        test_number:        The current test number to be used while saving the outputs
-        Q:                  Running cost on the error with the goal state  
-        R:                  Running cost on the error with the nominal control (zeros in this case)  
-        Qf:                 Final cost on the goal state  
+                            inherited within.
+        x_goal:             final goal point to be reached.
+        N:                  Number of timesteps to solve the problem for before back propagation.
+        test_number:        The current test number to be used while saving the outputs.
+        Q:                  Cost penalty matrix on the error with the goal state. 
+        R:                  Cost penalty matrix on the error with the nominal control (zeros in this case).  
+        Qf:                 Final cost penalty matrix on the error with the goal state.  
         solver_params:      params for the iLQR solver including learning rate decay,
-                            maximum iterations before termination, and tolerance
+                            maximum iterations before termination, and tolerance.
     """
     solver_params: SolverParams
 
@@ -187,7 +187,8 @@ class iLQR:
         #are tangential and the last 4 are slack variables. Hence to see if the cube made contact, we only
         #check if the tangential or normal values are greater than zero. Slack variables might be non-zero
         #even with no contact.
-        if(np.argwhere(curr_lam[:12]>eps).shape[0]>0):
+        tot_num_forces = 3*self.lcs.system.params.polytope.n_contacts
+        if(np.argwhere(curr_lam[:tot_num_forces]>eps).shape[0]>0):
             curr_lam = curr_lam[curr_lam>eps]
             C_mat = C_mat[:, np.where(curr_lam>eps)[0]]
             J_mat = J_mat[:, np.where(curr_lam>eps)[0]]
@@ -258,13 +259,13 @@ class iLQR:
         states = self.lcs.system.state_history
         controls = self.lcs.system.control_history
         control_forces, control_locs = controls[:, :2], controls[:, 2:]
-        gif_name = "gif_" + str(self.test_num)
+        gif_name = "ilqr_result_" + str(self.test_num)
         # Generate a gif of the simulated rollout.
         vis_utils.animation_gif_polytope(self.lcs.system.params.polytope, states, gif_name, self.lcs.system.params.dt,
             controls=(control_forces, control_locs), save=True)     
 
     def save_contols(self, controls):
-        file_name = "controls_" + str(self.test_num)
+        file_name = "ilqr_controls_" + str(self.test_num)
         path = f'{file_utils.OUT_DIR}/{file_name}.txt'
         with open(path, 'wb') as fp:
             pickle.dump(controls, fp)
