@@ -182,9 +182,9 @@ class iLQR:
         #access original dynamics to get the original lambdas
         curr_lam = self.get_lamda(state, action)
         eps = 1e-3
-        # check if there is a contact at all. if not use the normal dynamics itself as cube is in air
-        #the curr_lam vector is a vector of shape [16,] of which the first 8 are normal, the next 4 
-        #are tangential and the last 4 are slack variables. Hence to see if the cube made contact, we only
+        #Check if there is a contact at all. If not use the normal dynamics itself as polytope is in air
+        #the curr_lam vector is a vector of shape [4*n,] of which the first 2*n are tangential, the next n 
+        #are normal and the last n are slack variables. Hence to see if the polytope made contact, we only
         #check if the tangential or normal values are greater than zero. Slack variables might be non-zero
         #even with no contact.
         tot_num_forces = 3*self.lcs.system.params.polytope.n_contacts
