@@ -1,6 +1,9 @@
 # Python virtual environment
 venv
 
+# Build
+build
+
 # Temporary and output files
 toy_2d/out/
 toy_2d/tmp/
