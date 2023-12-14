@@ -5,6 +5,9 @@ theta from the ground's axes to the body's axes, in addition to time derivatives
 of all 3 of these quantities:  thus the state vector is 6-dimensional.
 """
 
+import sys
+sys.path.insert(0, "./")
+
 import numpy as np
 import pdb
 import matplotlib.pyplot as plt
@@ -88,7 +91,7 @@ vis_utils.traj_plot(states, controls, 'simulated_traj', save=True)
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
-    controls=(control_forces, control_locs), save=False)
+    controls=(control_forces, control_locs), save=True)
 
 pdb.set_trace()
 

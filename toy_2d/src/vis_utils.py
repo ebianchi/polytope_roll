@@ -18,6 +18,17 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
 
 FORCE_SCALING = 1.  # Scaling factor for viewing forces.
 
+"""Sometimes the individual frames get loaded as (h, w, 4) RGBA format instead
+of RGB.  Before writing the gif, convert to RGB by dropping the A channel."""
+def convert_to_rgb(image_list):
+    for i, image in enumerate(image_list):
+        # if image.shape[-1] == 3:
+        #     image_list[i] = np.concatenate(
+        #         (image, 255*np.ones(image.shape[:2] + (1,))), axis=2)
+        if image.shape[-1] == 4:
+            image_list[i] = image[:, :, :3]
+    return image_list
+
 """Make and save a gif of the polytope's state trajectory."""
 def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
                            save=False, force_scale=1., title=None):
@@ -97,7 +108,7 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
                 image = imageio.imread(filename)
                 writer.append_data(image)
         fps = 1./dt
-        gif = imageio.mimread(gif_file)
+        gif = convert_to_rgb(imageio.mimread(gif_file))
         imageio.mimsave(gif_file, gif, fps=fps)
 
         print(f'Saved gif at {gif_file}')
