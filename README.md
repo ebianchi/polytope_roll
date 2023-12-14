@@ -2,21 +2,28 @@
 Robotic manipulation to roll a polytope using trajectory optimization and controls.
 
 ## Installation instructions
-We recommend making a python virtual environment.
-
+We recommend making a python virtual environment.  Once navigating into a desired directory, clone the repository and set up the virtual environment via:
 ```
-cd /desired/location/
 git clone https://github.com/ebianchi/polytope_roll.git
 cd polytope_roll
-python3.10 -m venv venv
+python3 -m venv venv
 venv/bin/pip install --upgrade pip
 source venv/bin/activate
 ```
-At this point, ensure that `/desired/location/polytope_roll` is included in the `$PYTHONPATH` environment variable.  Then requirements can be installed via two steps.  First:
+At this point, ensure that `/desired/location/polytope_roll` is included in the `$PYTHONPATH` environment variable.  Without changing directory, you can do this immediately after the previous step via:
 ```
-pip install polytope_roll
+export PYTHONPATH=$PYTHONPATH:$PWD
 ```
-This installs all of the bundled requirements, including, at the time of creation of this repository, `imageio`, `matplotlib`, `numpy`, and `sympy`.  There is one remaining requirement that, in our experience, has only worked properly if directly pip installing the git repository url.
+
+Then requirements can be installed via three steps.  First, `pip install` the requirements in the current directory via:
+```
+pip install .
+```
+This installs all of the bundled requirements, including, at the time of creation of this repository, `imageio`, `matplotlib`, `numpy`, and `sympy`.  However this also installs `polytope_roll` as a package, which will be problematic if you want to edit the source code in this repository.  You can remove the `polytope_roll` package while keeping its requirements via:
+```
+pip uninstall polytope_roll
+```
+Lastly, there is one remaining requirement that, in our experience, has only worked properly if directly pip installing the git repository url.
 ```
 pip install git+https://github.com/AndyLamperski/lemkelcp.git
 ```
@@ -47,7 +54,6 @@ numpy           1.23.4
 packaging       21.3
 Pillow          9.2.0
 pip             22.3
-polytope-roll   1.0
 pyparsing       3.0.9
 python-dateutil 2.8.2
 setuptools      65.4.1
