@@ -34,26 +34,15 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 
 import numpy as np
-import scipy.sparse as sp
 import pdb
 import timeit
 
 import gurobipy as gp
-from gurobipy import GRB
 
-from toy_2d.src import file_utils
 from toy_2d.src import vis_utils
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams
-from toy_2d.src.two_dim_system import TwoDSystemForceOnly, TwoDimensionalSystem
-from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
+from toy_2d.src.two_dim_system import TwoDimensionalSystem
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
-
-
-
-M1 = 1e3
-M2 = 1e3
-
+from toy_2d.src.optimization_utils import GurobiModelHelper
 
 
 @dataclass
@@ -106,8 +95,8 @@ class TwoDTrajectoryOptimization:
                         coarser dt of self.params.traj_opt_dt.
         report:         A TrajectoryOptimizationReport that gets filled in with
                         statistics and results after the MPC is performed.
-        n_config:       The number of the state configuration (3 for 2D objects,
-                        representing x, y, th).
+        n_state:        The number of the state configuration (6 for 2D objects,
+                        representing x, y, th followed by their derivatives).
         n_contacts:     The number of contacts of the underlying polytope, i.e.
                         the number of polytope vertices.
         n_friction:     The number of friction polyhedron directions (2 for 2D
@@ -122,7 +111,7 @@ class TwoDTrajectoryOptimization:
 
         # Store some useful quantities, including the provided parameters.
         polytope = params.sim_system.params.polytope
-        self.n_config = polytope.n_config
+        self.n_state = 2*polytope.n_config
         self.n_contacts = polytope.n_contacts
         self.n_friction = polytope.n_friction
         self.n_controls = params.R.shape[0]
@@ -283,11 +272,11 @@ class TwoDTrajectoryOptimization:
         """Set up and solve a Gurobi optimization problem, returning the control
         inputs and objective cost."""
 
-        # For convenience, get the configuration, contacts, friction, and
-        # controls size, the number of lookahead steps, and control friction.
-        n = self.n_config
+        # For convenience, get the state, contacts, friction, and control sizes,
+        # the number of lookahead steps, control friction, and input limit.
+        n = self.n_state
         p = self.n_contacts
-        k_friction = self.n_friction
+        k = self.n_friction
         nu = self.n_controls
         lookahead = self.params.lookahead
         mu_control = self.params.sim_system.params.mu_control
@@ -297,78 +286,35 @@ class TwoDTrajectoryOptimization:
         A, B, C, d, G, H, J, l, P, Q, R, S = self._get_lcs_plus_terms(x_current)
 
         # Create a new gurobi model.
-        model = gp.Model("traj_opt")
-
-        # Mute the model (may want to comment this out for debugging).
-        model.setParam('OutputFlag', 0)
+        model = GurobiModelHelper.create_optimization_model(
+            "traj_opt", verbose=False)
 
         # Create variables.
-        xs = model.addMVar(shape=(lookahead+1, 2*n), lb=-np.inf, ub=np.inf,
-                            vtype=GRB.CONTINUOUS, name="xs")
-        x_errs = model.addMVar(shape=(lookahead, 2*n), lb=-np.inf, ub=np.inf,
-                                vtype=GRB.CONTINUOUS, name="x_errs")
-        us = model.addMVar(shape=(lookahead, nu), lb=-input_limit,
-                           ub=input_limit, vtype=GRB.CONTINUOUS, name="us")
-        lambdas = model.addMVar(shape=(lookahead, p*(k_friction+2)),
-                                lb=-np.inf, ub=np.inf,
-                                vtype=GRB.CONTINUOUS, name="lambdas")
-        ys = model.addMVar(shape=(lookahead, p*(k_friction+2)),
-                           lb=-np.inf, ub=np.inf,
-                           vtype=GRB.CONTINUOUS, name="ys")
+        xs = GurobiModelHelper.create_xs(model, lookahead, n)
+        x_errs = GurobiModelHelper.create_x_errs(model, lookahead, n)
+        us = GurobiModelHelper.create_us(model, lookahead, nu, input_limit)
+        lambdas = GurobiModelHelper.create_lambdas(model, lookahead, p, k)
+        ys = GurobiModelHelper.create_ys(model, lookahead, p, k)
 
         # Set objective:  penalize distance to goal, control input, and slip
         # measurement.
-        obj = 0
-        for i in range(lookahead):
-            obj += x_errs[i, :] @ Q @ x_errs[i, :]
-            obj += us[i, :] @ R @ us[i, :]
-            obj += xs[i, :] @ S @ xs[i, :]
-        model.setObjective(obj, GRB.MINIMIZE)
+        model = GurobiModelHelper.set_objective(
+            model, lookahead, Q, R, S, x_errs, us, xs)
 
         # Build constraints.
-        # -> Dynamics, initial condition, error coordinates, output, etc.
-        model.addConstr(xs[0,:] == x_current, name="initial_condition")
-        model.addConstrs(
-            (xs[i+1,:] == A@xs[i,:] + B@P@us[i,:] + C@lambdas[i,:] + d \
-             for i in range(lookahead)), name="dynamics")
-        model.addConstrs(
-            (x_errs[i,:] == xs[i+1,:] - self.x_goal \
-             for i in range(lookahead)), name="error_coordinates")
-        model.addConstrs(
-            (ys[i,:] >= 0 for i in range(lookahead)), name="comp_1")
-        model.addConstrs(
-            (lambdas[i,:] >= 0 for i in range(lookahead)), name="comp_2")
-        model.addConstrs(
-            (ys[i,:] == G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
-             for i in range(lookahead)), name="output")
-        # -> Note:  the below 3 friction cone constraints expect the input
-        # forces to be in the form [f_normal, f_tangent].
-        model.addConstrs(
-            (us[i,0] >= 0 for i in range(lookahead)), name="friction_cone_1")
-        model.addConstrs(
-            (-mu_control*us[i,0] <= us[i,1] \
-             for i in range(lookahead)), name="friction_cone_2a")
-        model.addConstrs(
-            (us[i,1] <= mu_control*us[i,0] \
-             for i in range(lookahead)), name="friction_cone_2b")
-
-        # -> Option 1:  Big M method (convex).
-        if self.params.use_big_M:
-            ss = model.addMVar(shape=(lookahead, p*(k_friction+2)),
-                               vtype=GRB.BINARY, name="ss")
-            model.addConstrs(
-                (M1*ss[i,:] >= G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
-                 for i in range(lookahead)), name="big_m_1")
-            model.addConstrs(
-                (M2*(1-ss[i,:]) >= lambdas[i,:] for i in range(lookahead)),
-                name="big_m_2")
-
-        # -> Option 2:  Complementarity constraint (non-convex).
-        else:
-            model.params.NonConvex = 2
-            model.addConstrs(
-                (lambdas[i,:] @ ys[i,:] == 0 for i in range(lookahead)),
-                name="complementarity")
+        model = GurobiModelHelper.add_initial_condition_constr(
+            model, xs, x_current)
+        model = GurobiModelHelper.add_error_coordinates_constr(
+            model, lookahead, xs, x_errs, self.x_goal)
+        model = GurobiModelHelper.add_dynamics_constr(
+            model, lookahead, xs, us, lambdas, A, B, P, C, d)
+        model = GurobiModelHelper.add_complementarity_constr(
+            model, lookahead, self.params.use_big_M, xs, us, lambdas, ys, p, k,
+            G, H, P, J, l)
+        model = GurobiModelHelper.add_output_constr(
+            model, lookahead, xs, us, lambdas, ys, G, H, P, J, l)
+        model = GurobiModelHelper.add_friction_cone_constr(
+            model, lookahead, mu_control, us)
 
         # Solve the optimization problem, returning the control input and cost.
         try:
