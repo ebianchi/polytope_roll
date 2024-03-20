@@ -290,31 +290,38 @@ class TwoDTrajectoryOptimization:
             "traj_opt", verbose=False)
 
         # Create variables.
-        xs = GurobiModelHelper.create_xs(model, lookahead, n)
-        x_errs = GurobiModelHelper.create_x_errs(model, lookahead, n)
-        us = GurobiModelHelper.create_us(model, lookahead, nu, input_limit)
-        lambdas = GurobiModelHelper.create_lambdas(model, lookahead, p, k)
-        ys = GurobiModelHelper.create_ys(model, lookahead, p, k)
+        xs = GurobiModelHelper.create_xs(model, lookahead=lookahead, n=n)
+        x_errs = GurobiModelHelper.create_x_errs(model, lookahead=lookahead,
+                                                 n=n)
+        us = GurobiModelHelper.create_us(model, lookahead=lookahead, nu=nu,
+                                         input_limit=input_limit)
+        lambdas = GurobiModelHelper.create_lambdas(model, lookahead=lookahead,
+                                                   p=p, k=k)
+        ys = GurobiModelHelper.create_ys(model, lookahead=lookahead, p=p, k=k)
 
         # Set objective:  penalize distance to goal, control input, and slip
         # measurement.
         model = GurobiModelHelper.set_objective(
-            model, lookahead, Q, R, S, x_errs, us, xs)
+            model, lookahead=lookahead, Q=Q, R=R, S=S, x_errs=x_errs, us=us,
+            xs=xs)
 
         # Build constraints.
         model = GurobiModelHelper.add_initial_condition_constr(
-            model, xs, x_current)
+            model, xs=xs, x_current=x_current)
         model = GurobiModelHelper.add_error_coordinates_constr(
-            model, lookahead, xs, x_errs, self.x_goal)
+            model, lookahead=lookahead, xs=xs, x_errs=x_errs,
+            x_goal=self.x_goal)
         model = GurobiModelHelper.add_dynamics_constr(
-            model, lookahead, xs, us, lambdas, A, B, P, C, d)
+            model, lookahead=lookahead, xs=xs, us=us, lambdas=lambdas, A=A, B=B,
+            P=P, C=C, d=d)
         model = GurobiModelHelper.add_complementarity_constr(
-            model, lookahead, self.params.use_big_M, xs, us, lambdas, ys, p, k,
-            G, H, P, J, l)
+            model, lookahead=lookahead, use_big_M=self.params.use_big_M, xs=xs,
+            us=us, lambdas=lambdas, ys=ys, p=p, k=k, G=G, H=H, P=P, J=J, l=l)
         model = GurobiModelHelper.add_output_constr(
-            model, lookahead, xs, us, lambdas, ys, G, H, P, J, l)
+            model, lookahead=lookahead, xs=xs, us=us, lambdas=lambdas, ys=ys,
+            G=G, H=H, P=P, J=J, l=l)
         model = GurobiModelHelper.add_friction_cone_constr(
-            model, lookahead, mu_control, us)
+            model, lookahead=lookahead, mu_control=mu_control, us=us)
 
         # Solve the optimization problem, returning the control input and cost.
         try:
