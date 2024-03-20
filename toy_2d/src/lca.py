@@ -106,7 +106,7 @@ class admm_lca(object):
         self.lam = np.zeros((self.N, self.p*(self.k+2)))
 
         # Allow the dual variable r to be of reduced size from true states x.
-        self.r = np.zeros((self.N, self.reduced_n))
+        self.r = np.zeros((self.N + 1, self.reduced_n))
 
         self.a = np.zeros_like(self.u)
         self.gamma = np.zeros_like(self.lam)
@@ -152,8 +152,13 @@ class admm_lca(object):
     #     self.a = a.value
 
     def solve_reference_gurobi(self):
-        """Build and solve a Gurobi problem, just like in traj_opt but without
-        dynamics constraints.
+        """Build and solve a Gurobi optimization problem for the trajectory
+        generation (or "reference") layer.  This is just like in traj_opt but
+        without dynamics constraints and including dual costs in the objective.
+        This implements Equation (6a) in the paper.
+
+        [1] A. Srikanthan, V. Kumar, N. Matni, "Augmented Langrangian Methods as
+        Layered Control Architectures," 2023.
         """
         # TODO: figure out what x_current should be
         x_current = self.x_init
@@ -167,31 +172,34 @@ class admm_lca(object):
 
         # Build a Gurobi optimization model.
         model = GurobiModelHelper.create_optimization_model(
-            "admm_traj_opt", verbose=False)
+            "admm_trajectory_generation_layer", verbose=False)
         
         # Create variables.
-        r = GurobiModelHelper.create_xs(model, self.N, self.n)
-        r_err = GurobiModelHelper.create_x_errs(model, self.N, self.n)
-        a = GurobiModelHelper.create_us(model, self.N, self.m, input_limit)
-        gamma = GurobiModelHelper.create_lambdas(model, self.N, self.p, self.k)
-        y = GurobiModelHelper.create_ys(model, self.N, self.p, self.k)
+        r = GurobiModelHelper.create_xs(model, lookahead=self.N, n=self.n)
+        r_err = GurobiModelHelper.create_x_errs(model, lookahead=self.N,
+                                                n=self.n)
+        a = GurobiModelHelper.create_us(model, lookahead=self.N, nu=self.m,
+                                        input_limit=input_limit)
+        gamma = GurobiModelHelper.create_lambdas(model, lookahead=self.N,
+                                                 p=self.p, k=self.k)
+        y = GurobiModelHelper.create_ys(model, lookahead=self.N, p=self.p,
+                                        k=self.k)
 
         # Build constraints.  Explicitly exclude the dynamics constraint.
         # TODO: check if the initial condition constraint is needed / more of a
         # need to check what x_current should be.
         model = GurobiModelHelper.add_initial_condition_constr(
-            model, r, x_current)
+            model, xs=r, x_current=x_current)
         model = GurobiModelHelper.add_error_coordinates_constr(
-            model, self.N, r, r_err, self.x_goal)
-        # model = GurobiModelHelper.add_dynamics_constr(    <-- exclude dynamics
-        #     model, self.N, r, a, gamma, A, B, P, C, d)
+            model, lookahead=self.N, xs=r, x_errs=r_err, x_goal=self.x_goal)
         model = GurobiModelHelper.add_complementarity_constr(
-            model, self.N, use_big_M, r, a, gamma, y, self.p, self.k, G, H, P,
-            J, l)
+            model, lookahead=self.N, use_big_M=use_big_M, xs=r, us=a,
+            lambdas=gamma, ys=y, p=self.p, k=self.k, G=G, H=H, P=P, J=J, l=l)
         model = GurobiModelHelper.add_output_constr(
-            model, self.N, r, a, gamma, y, G, H, P, J, l)
+            model, lookahead=self.N, xs=r, us=a, lambdas=gamma, ys=y, G=G, H=H,
+            P=P, J=J, l=l)
         model = GurobiModelHelper.add_friction_cone_constr(
-            model, self.N, mu_control, a)
+            model, lookahead=self.N, mu_control=mu_control, us=a)
         
         # Set the model's objective:  use stage cost to encourage smoothness,
         # dual error cost to encourage convergence, and final error to encourage
@@ -201,14 +209,18 @@ class admm_lca(object):
             stage_err = r[i+1, :] - r[i, :]
             obj += 0.1 * stage_err @ stage_err
 
-            state_dual_err = r[i, :] - self.x[i, :]@self.Tr + self.vr[i, :]
+            state_dual_err = self.x[i, :]@self.Tr - r[i, :] + self.vr[i, :]
             obj += (self.rho/2) * state_dual_err @ state_dual_err
 
-            control_dual_err = a[i, :] - self.u[i, :] + self.vu[i, :]
+            control_dual_err = self.u[i, :] - a[i, :] + self.vu[i, :]
             obj += (self.rho/2) * control_dual_err @ control_dual_err
 
-            comp_dual_err = gamma[i, :] - self.lam[i, :] + self.vgamma[i, :]
+            comp_dual_err = self.lam[i, :] - gamma[i, :] + self.vgamma[i, :]
             obj += (self.rho/2) * comp_dual_err @ comp_dual_err
+
+        state_dual_err = self.x[self.N, :]@self.Tr - r[self.N, :] + \
+            self.vr[self.N, :]
+        obj += (self.rho/2) * state_dual_err @ state_dual_err
 
         final_err = r[-1, :] - self.x_goal
         obj += 1000 * final_err @ final_err
@@ -217,12 +229,96 @@ class admm_lca(object):
         # Solve the optimization problem.
         try:
             model.optimize()
-            print(f'Obj: {model.ObjVal}')
+            print(f'Reference Obj: {model.ObjVal}')
 
             # Store the solved r, a, gamma variables.
             self.r = r.X
             self.a = a.X
             self.gamma = gamma.X
+
+            # Avoid the pdb trace for error handling if this succeeded.
+            return
+
+        except gp.GurobiError as e:  print(f'Error code {e.errno}: {e}')
+        except AttributeError:  print('Encountered an attribute error')
+        pdb.set_trace()
+
+
+    def solve_control_gurobi(self):
+        """Build and solve a Gurobi optimization problem for the feedback
+        conrol (or "control") layer.  This is just like in traj_opt but without
+        any contact-related constraints and including dual costs in the
+        objective.  This implements Equation (6b) in the paper.
+
+        [1] A. Srikanthan, V. Kumar, N. Matni, "Augmented Langrangian Methods as
+        Layered Control Architectures," 2023.
+        """
+        # TODO: figure out what x_current should be
+        x_current = self.x_init
+
+        # Grab a few variables for convenience.
+        input_limit = self.traj_opt_object.params.input_limit
+        A, B, C, d, _G, _H, _J, _l, P, _Q, R, _S = \
+            self.traj_opt_object._get_lcs_plus_terms(x_current)
+
+        # Build a Gurobi optimization model.
+        model = GurobiModelHelper.create_optimization_model(
+            "admm_feedback_control_layer", verbose=False)
+
+        # Create variables.
+        x = GurobiModelHelper.create_xs(model, lookahead=self.N, n=self.n)
+        x_err = GurobiModelHelper.create_x_errs(model, lookahead=self.N,
+                                                n=self.n)
+        u = GurobiModelHelper.create_us(model, lookahead=self.N, nu=self.m,
+                                        input_limit=input_limit)
+        lam = GurobiModelHelper.create_lambdas(model, lookahead=self.N,
+                                               p=self.p, k=self.k)
+        y = GurobiModelHelper.create_ys(model, lookahead=self.N, p=self.p,
+                                        k=self.k)
+
+        # Build constraints.  Explicitly exclude any contact-related constraints
+        # and include the dynamics constraint.
+        # TODO: check if the initial condition constraint is needed / more of a
+        # need to check what x_current should be.
+        model = GurobiModelHelper.add_initial_condition_constr(
+            model, xs=x, x_current=x_current)
+        model = GurobiModelHelper.add_error_coordinates_constr(
+            model, lookahead=self.N, xs=x, x_errs=x_err, x_goal=self.x_goal)
+        model = GurobiModelHelper.add_dynamics_constr(
+            model, lookahead=self.N, xs=x, us=u, lambdas=lam, A=A, B=B, P=P,
+            C=C, d=d)
+
+        # Set the model's objective:  use dual error cost to encourage,
+        # convergence, and control cost to encourage efficiency.
+        obj = 0
+        for i in range(self.N):
+            input_cost = u[i, :] @ R @ u[i, :]
+            obj += input_cost
+
+            state_dual_err = x[i, :]@self.Tr - self.r[i, :] + self.vr[i, :]
+            obj += (self.rho/2) * state_dual_err @ state_dual_err
+
+            control_dual_err = u[i, :] - self.a[i, :] + self.vu[i, :]
+            obj += (self.rho/2) * control_dual_err @ control_dual_err
+
+            comp_dual_err = lam[i, :] - self.gamma[i, :] + self.vgamma[i, :]
+            obj += (self.rho/2) * comp_dual_err @ comp_dual_err
+
+        state_dual_err = x[self.N, :]@self.Tr - self.r[self.N, :] + \
+            self.vr[self.N, :]
+        obj += (self.rho/2) * state_dual_err @ state_dual_err
+
+        model.setObjective(obj, GRB.MINIMIZE)
+
+        # Solve the optimization problem.
+        try:
+            model.optimize()
+            print(f'Control Obj: {model.ObjVal}')
+
+            # Store the solved x, u, lambda variables.
+            self.x = x.X
+            self.u = u.X
+            self.lam = lam.X
 
             # Avoid the pdb trace for error handling if this succeeded.
             return

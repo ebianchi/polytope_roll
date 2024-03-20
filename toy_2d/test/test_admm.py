@@ -93,5 +93,6 @@ pdb.set_trace()
 u0 = np.zeros((traj_opt.n_controls,))
 admm = admm_lca(traj_opt, x0, u0, x_goal, rho=0.5)
 admm.solve_reference_gurobi()
+admm.solve_control_gurobi()
 
 pdb.set_trace()
