@@ -160,7 +160,8 @@ class admm_lca(object):
         [1] A. Srikanthan, V. Kumar, N. Matni, "Augmented Langrangian Methods as
         Layered Control Architectures," 2023.
         """
-        # TODO: figure out what x_current should be
+        # TODO: x_current as x_init works for first time, but may need to change
+        # this if doing RHC.
         x_current = self.x_init
 
         # Grab a few variables for convenience.
