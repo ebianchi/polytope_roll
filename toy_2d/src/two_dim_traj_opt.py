@@ -268,6 +268,33 @@ class TwoDTrajectoryOptimization:
         # Return all the LCS and control vectors/matrices.
         return A, B, C, d, G, H, J, l, P, Q, R, S
 
+    def get_lcs_plus_terms_over_horizon(self, xs_over_horizon):
+        """For xs_over_horizon as a (n_timesteps, n_state) array, return all the
+        LCS and control vectors and matrices over the horizon.  All of these
+        terms will be returned as lists of length n_timesteps, of same-sized
+        numpy arrays.
+
+        e.g. As will be [np.ndarray(n_state, n_state)] * n_timesteps."""
+        As, Bs, Cs, ds, Gs, Hs, Js, ls, Ps = [], [], [], [], [], [], [], [], []
+        Qs, Rs, Ss = [], [], []
+
+        for x in xs_over_horizon:
+            A, B, C, d, G, H, J, l, P, Q, R, S = self._get_lcs_plus_terms(x)
+            As.append(A)
+            Bs.append(B)
+            Cs.append(C)
+            ds.append(d)
+            Gs.append(G)
+            Hs.append(H)
+            Js.append(J)
+            ls.append(l)
+            Ps.append(P)
+            Qs.append(Q)
+            Rs.append(R)
+            Ss.append(S)
+
+        return As, Bs, Cs, ds, Gs, Hs, Js, ls, Ps, Qs, Rs, Ss
+
     def _set_up_and_solve_optimization_problem(self, x_current):
         """Set up and solve a Gurobi optimization problem, returning the control
         inputs and objective cost."""
@@ -316,7 +343,7 @@ class TwoDTrajectoryOptimization:
             P=P, C=C, d=d)
         model = GurobiModelHelper.add_complementarity_constr(
             model, lookahead=lookahead, use_big_M=self.params.use_big_M, xs=xs,
-            us=us, lambdas=lambdas, ys=ys, p=p, k=k, G=G, H=H, P=P, J=J, l=l)
+            us=us, lambdas=lambdas, ys=ys, p=p, k=k)
         model = GurobiModelHelper.add_output_constr(
             model, lookahead=lookahead, xs=xs, us=us, lambdas=lambdas, ys=ys,
             G=G, H=H, P=P, J=J, l=l)
