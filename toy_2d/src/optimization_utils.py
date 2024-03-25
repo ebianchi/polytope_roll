@@ -81,27 +81,45 @@ class GurobiModelHelper:
         model, lookahead=None, xs=None, us=None, lambdas=None, A=None, B=None,
         P=None, C=None, d=None
     ):
+        # First handle the provided LCS terms.
+        if type(A) == list:
+            assert type(B)==type(P)==type(C)==type(d)==list, 'If given one ' + \
+                'listed LCS term, all must be provided as lists.'
+            assert lookahead==len(A)==len(B)==len(P)==len(C)==len(d), 'LCS ' + \
+                'terms must all be the same length (and equal to lookahead).'
+        else:
+            assert type(A)==type(B)==type(P)==type(C)==type(d)==np.ndarray, \
+                'If LCS terms not lists, they must all be numpy arrays.'
+            A = [A] * lookahead
+            B = [B] * lookahead
+            P = [P] * lookahead
+            C = [C] * lookahead
+            d = [d] * lookahead
+
+        # Add the constraints.
         model.addConstrs(
-            (xs[i+1,:] == A@xs[i,:] + B@P@us[i,:] + C@lambdas[i,:] + d \
+            (xs[i+1,:] == \
+                A[i]@xs[i,:] + B[i]@P[i]@us[i,:] + C[i]@lambdas[i,:] + d[i] \
              for i in range(lookahead)), name="dynamics")
         return model
 
     @staticmethod
     def add_complementarity_constr(
         model, lookahead=None, use_big_M=None, xs=None, us=None, lambdas=None,
-        ys=None, p=None, k=None, G=None, H=None, P=None, J=None, l=None
+        ys=None, p=None, k=None
     ):
         model.addConstrs(
             (ys[i,:] >= 0 for i in range(lookahead)), name="comp_1")
         model.addConstrs(
             (lambdas[i,:] >= 0 for i in range(lookahead)), name="comp_2")
         
+        # -> Option 1:  Big M method (convex).
         if use_big_M:
             ss = model.addMVar(shape=(lookahead, p*(k+2)),
                                vtype=GRB.BINARY, name="ss")
             model.addConstrs(
-                (M1*ss[i,:] >= G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
-                 for i in range(lookahead)), name="big_m_1")
+                (M1*ss[i,:] >= ys[i,:] for i in range(lookahead)),
+                name="big_m_1")
             model.addConstrs(
                 (M2*(1-ss[i,:]) >= lambdas[i,:] for i in range(lookahead)),
                 name="big_m_2")
@@ -120,8 +138,25 @@ class GurobiModelHelper:
         model, lookahead=None, xs=None, us=None, lambdas=None, ys=None, G=None,
         H=None, P=None, J=None, l=None
     ):
+        # First handle the provided LCS terms.
+        if type(G) == list:
+            assert type(H)==type(P)==type(J)==type(l)==list, 'If given one ' + \
+                'listed LCS term, all must be provided as lists.'
+            assert lookahead==len(G)==len(H)==len(P)==len(J)==len(l), 'LCS ' + \
+                'terms must all be the same length (and equal to lookahead).'
+        else:
+            assert type(G)==type(H)==type(P)==type(J)==type(l)==np.ndarray, \
+                'If LCS terms not lists, they must all be numpy arrays.'
+            G = [G] * lookahead
+            H = [H] * lookahead
+            P = [P] * lookahead
+            J = [J] * lookahead
+            l = [l] * lookahead
+
+        # Add the constraints.
         model.addConstrs(
-            (ys[i,:] == G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
+            (ys[i,:] == \
+                G[i]@xs[i,:] + H[i]@P[i]@us[i,:] + J[i]@lambdas[i,:] + l[i] \
              for i in range(lookahead)), name="output")
         return model
 
