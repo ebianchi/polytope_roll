@@ -21,6 +21,7 @@ Bibit Bianchini <bibit@seas.upenn.edu>
 """
 
 # import cvxpy as cp
+import copy
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -45,25 +46,28 @@ class admm_lca(object):
     Input arguments
         traj_opt_object: a TwoDTrajectoryOptimization object
         x_init: initial condition
-        u_init: initial input
         x_goal: final state
-        rho: admm parameter for LCA problem
+        rho: ADMM parameter for LCA problem
+        tol: ADMM tolerance for terminating iterations
 
     Member functions
-        solve_reference: function to solve one instance of reference planning
-            layer (NOTE: currently unimplemented, use solve_reference_gurobi
-            instead.)
+        construct_LCS_terms_from_inputs: function to construct the LCS terms
+            by simulating the system with the current control inputs and using
+            the resulting state trajectory as linearization points.
         solve_reference_gurobi: function to solve one instance of reference
             planning layer using Gurobi and relying on GurobiModelHelper.
+        solve_control_gurobi: function to solve one instance of the feedback
+            control layer using Gurobi.
+        run_admm: function to run ADMM iterations until desired tolerance is
+            achieved.
         rollout: function to compute state trajectory given initial conditions
             and input
     """
     # def __init__(self, dynamics, num_timesteps, dt, x_init, u_init, x_goal, rho,
     #              planning_state_idx=None, constr=None):
-    def __init__(self, traj_opt_object, x_init, u_init, x_goal, rho, tol):
-        assert x_init.ndim == u_init.ndim == x_goal.ndim == 1, 'Expected all ' \
-            f'to be of dimension 1: {x_init.ndim=}, {u_init.ndim=}, ' \
-            f'{x_goal.ndim=}'
+    def __init__(self, traj_opt_object, x_init, x_goal, rho, tol):
+        assert x_init.ndim == x_goal.ndim == 1, 'Expected all to be of ' \
+            f'dimension 1: {x_init.ndim=}, {x_goal.ndim=}'
         assert x_init.shape[0] == x_goal.shape[0] == traj_opt_object.n_state, \
             f'Expected all shapes to match: {x_init.shape=}, {x_goal.shape=},' \
             f' {traj_opt_object.n_state=}'
@@ -72,7 +76,6 @@ class admm_lca(object):
         # self.dynamics = dynamics
         self.dt = traj_opt_object.params.traj_opt_dt
         self.x_init = x_init
-        self.u_init = u_init
         self.x_goal = x_goal
 
         self.N = traj_opt_object.params.lookahead
@@ -84,7 +87,6 @@ class admm_lca(object):
         self.traj_opt_object = traj_opt_object
 
         self.rho = rho
-
         self.tol = tol
 
         # TODO: allow planning states to be subset of true states.  Or not,
@@ -123,41 +125,53 @@ class admm_lca(object):
         self.constr_idx = None
         self.constr = None
 
-    # def solve_reference(self):
-    #     """Member function for solving one instance of planning layer
-    #     sub-problem in the LCA.
-    #     """
-    #     r = cp.Variable(self.r.shape)
-    #     a = cp.Variable(self.a.shape)
-    #     stage_err = cp.hstack([(r[t+1] - r[t]) for t in range(self.N - 1)])
-    #     final_err = r[-1] - self.x_goal
+        self.R = self.traj_opt_object.params.R
 
-    #     stage_cost = 0.1 * cp.sum_squares(stage_err)
-    #     final_cost = 1000 * cp.sum_squares(final_err)
-    #     utility_cost = stage_cost + final_cost
-    #     admm_cost = \
-    #         (self.rho / 2) * cp.sum_squares(r - self.x @ self.Tr + self.vr) + \
-    #         (self.rho / 2) * cp.sum_squares(a - self.u + self.vu)
+        # LCS terms to get filled in about a trajectory of states.  For now,
+        # initialize them about the initial state for the full horizon.
+        init_traj = [x_init] * self.N
+        self.As, self.Bs, self.Cs, self.ds, self.Gs, self.Hs, self.Js, \
+            self.ls, self.Ps, self.Qs, self.Rs, self.Ss = \
+            self.traj_opt_object.get_lcs_plus_terms_over_horizon(init_traj)
 
-    #     constr = [r[0] == self.x_init[0:len(self.reduced_n)], r[-1] == self.x_goal]
-    #     # Corridor constraints
-    #     if self.constr:
-    #         # for k in self.constr_idx:
-    #         # Need to make state constraints more general
-    #         constr.append(r[int(self.N/2):, 1] >= self.constr[1][0])
-    #         constr.append(r[int(self.N / 2):, 1] <= self.constr[1][1])
-    #         constr.append(r[:-int(self.N/2), 0] >= self.constr[0][0])
-    #         constr.append(r[:-int(self.N / 2), 0] <= self.constr[0][1])
-    #     ref_prob = cp.Problem(cp.Minimize(utility_cost + admm_cost), constr)
-    #     ref_prob.solve()
-    #     self.r = r.value
-    #     self.a = a.value
+        # To eventually fill in the LCS terms adaptively, will need to simulate
+        # a coarsely-timestepped system that emulates the true (i.e. sim)
+        # system.
+        self.coarse_sim_system = copy.deepcopy(
+            traj_opt_object.params.sim_system)
+        self.coarse_sim_system.params.dt = self.dt
+
+    def construct_LCS_terms_from_inputs(self):
+        """Using the stored control inputs in self.u, simulate a coarse system
+        with the inputs to get a trajectory of states.  Use those states as the
+        linearization knot points for the LCS terms."""
+        # Simulate the coarse system to get the trajectory of states.
+        self.coarse_sim_system.simulate_dynamics_over_horizon(
+            controls_over_horizon=self.u, init_state=self.x_init)
+
+        x_traj = self.coarse_sim_system.state_history
+        assert x_traj.shape == (self.N+1, self.n), f'Expected shape ' \
+            f'{(self.N+1, self.n)}, got {x_traj.shape}'
+        x_traj = x_traj[:-1, :]
+
+        # Get the LCS terms from this state trajectory.
+        self.As, self.Bs, self.Cs, self.ds, self.Gs, self.Hs, self.Js, \
+            self.ls, self.Ps, _Qs, _Rs, _Ss = \
+            self.traj_opt_object.get_lcs_plus_terms_over_horizon(x_traj)
+        print('Updated LCS terms from self.u')
 
     def solve_reference_gurobi(self):
         """Build and solve a Gurobi optimization problem for the trajectory
         generation (or "reference") layer.  This is just like in traj_opt but
         without dynamics constraints and including dual costs in the objective.
         This implements Equation (6a) in the paper.
+
+        This step requires that self.x, self.u, and self.lam are already set to
+        numerical values.  It also requires the LCS terms self.As, self.Bs,
+        self.Cs, self.ds, self.Gs, self.Hs, self.Js, self.ls, self.Ps, self.Qs,
+        self.Rs, and self.Ss are set as well.  These LCS terms, self.u, and
+        self.lam will be of length self.N while self.x will be of length
+        self.N+1.
 
         [1] A. Srikanthan, V. Kumar, N. Matni, "Augmented Langrangian Methods as
         Layered Control Architectures," 2023.
@@ -170,8 +184,6 @@ class admm_lca(object):
         mu_control = self.traj_opt_object.params.sim_system.params.mu_control
         input_limit = self.traj_opt_object.params.input_limit
         use_big_M = self.traj_opt_object.params.use_big_M
-        _A, _B, _C, _d, G, H, J, l, P, _Q, _R, _S = \
-            self.traj_opt_object._get_lcs_plus_terms(x_current)
 
         # Build a Gurobi optimization model.
         model = GurobiModelHelper.create_optimization_model(
@@ -197,10 +209,10 @@ class admm_lca(object):
             model, lookahead=self.N, xs=r, x_errs=r_err, x_goal=self.x_goal)
         model = GurobiModelHelper.add_complementarity_constr(
             model, lookahead=self.N, use_big_M=use_big_M, xs=r, us=a,
-            lambdas=gamma, ys=y, p=self.p, k=self.k, G=G, H=H, P=P, J=J, l=l)
+            lambdas=gamma, ys=y, p=self.p, k=self.k)
         model = GurobiModelHelper.add_output_constr(
-            model, lookahead=self.N, xs=r, us=a, lambdas=gamma, ys=y, G=G, H=H,
-            P=P, J=J, l=l)
+            model, lookahead=self.N, xs=r, us=a, lambdas=gamma, ys=y, G=self.Gs,
+            H=self.Hs, P=self.Ps, J=self.Js, l=self.ls)
         model = GurobiModelHelper.add_friction_cone_constr(
             model, lookahead=self.N, mu_control=mu_control, us=a)
         
@@ -252,6 +264,13 @@ class admm_lca(object):
         any contact-related constraints and including dual costs in the
         objective.  This implements Equation (6b) in the paper.
 
+        This step requires that self.r, self.a, and self.gamma are already set
+        to numerical values.  It also requires the LCS terms self.As, self.Bs,
+        self.Cs, self.ds, self.Gs, self.Hs, self.Js, self.ls, self.Ps, self.Qs,
+        self.Rs, and self.Ss are set as well.  These LCS terms, self.a, and
+        self.gamma will be of length self.N while self.r will be of length
+        self.N+1.
+
         [1] A. Srikanthan, V. Kumar, N. Matni, "Augmented Langrangian Methods as
         Layered Control Architectures," 2023.
         """
@@ -260,8 +279,6 @@ class admm_lca(object):
 
         # Grab a few variables for convenience.
         input_limit = self.traj_opt_object.params.input_limit
-        A, B, C, d, _G, _H, _J, _l, P, _Q, R, _S = \
-            self.traj_opt_object._get_lcs_plus_terms(x_current)
 
         # Build a Gurobi optimization model.
         model = GurobiModelHelper.create_optimization_model(
@@ -275,8 +292,6 @@ class admm_lca(object):
                                         input_limit=input_limit)
         lam = GurobiModelHelper.create_lambdas(model, lookahead=self.N,
                                                p=self.p, k=self.k)
-        y = GurobiModelHelper.create_ys(model, lookahead=self.N, p=self.p,
-                                        k=self.k)
 
         # Build constraints.  Explicitly exclude any contact-related constraints
         # and include the dynamics constraint.
@@ -287,14 +302,14 @@ class admm_lca(object):
         model = GurobiModelHelper.add_error_coordinates_constr(
             model, lookahead=self.N, xs=x, x_errs=x_err, x_goal=self.x_goal)
         model = GurobiModelHelper.add_dynamics_constr(
-            model, lookahead=self.N, xs=x, us=u, lambdas=lam, A=A, B=B, P=P,
-            C=C, d=d)
+            model, lookahead=self.N, xs=x, us=u, lambdas=lam, A=self.As,
+            B=self.Bs, P=self.Ps, C=self.Cs, d=self.ds)
 
         # Set the model's objective:  use dual error cost to encourage,
         # convergence, and control cost to encourage efficiency.
         obj = 0
         for i in range(self.N):
-            input_cost = u[i, :] @ R @ u[i, :]
+            input_cost = u[i, :] @ self.R @ u[i, :]
             obj += input_cost
 
             state_dual_err = x[i, :]@self.Tr - self.r[i, :] + self.vr[i, :]
@@ -343,6 +358,9 @@ class admm_lca(object):
 
             self.solve_control_gurobi()
 
+            # Update the LCS terms based on the new control inputs.
+            self.construct_LCS_terms_from_inputs()
+
             # compute residuals
             sxk = self.rho * (prev_x - self.x).flatten()
             suk = self.rho * (prev_u - self.u).flatten()
@@ -370,6 +388,8 @@ class admm_lca(object):
             err = np.trace(
                 (self.r - self.x @ self.Tr).T @ (self.r - self.x @ self.Tr)) + np.trace(
                 (self.a - self.u).T @ (self.a - self.u)) + np.trace((self.lam - self.gamma + self.vgamma).T @ (self.lam - self.gamma + self.vgamma))
+
+            print(f'ERROR: {err}\n\n=== ', end='')
 
         end = time.time()
 
@@ -404,129 +424,6 @@ class admm_lca(object):
         plt.plot(x_plot[0::2], x_plot[1::2], linewidth=2, c=col, alpha=col_alpha)
         plt.scatter(x[0], x[1], marker='.', s=200, c=col, alpha=col_alpha)
 
-
-# # @partial(jax.jit, static_argnums=0)
-# def ctl_prob(dynamics, x0, r, a, vr, vu, u0, rho, T, Tr):
-#     def cost(x, u, t):
-#         # state_err = state_wrap(r[t] - Tr @ x + vr[t])
-#         state_err = r[t] - x @ Tr + vr[t]
-#         input_err = a[t] - u + vu[t]
-#         stage_costs = ((rho / 2) * jnp.dot(state_err, state_err) +
-#                            (rho / 2) * jnp.dot(input_err, input_err) + 0.01 * jnp.dot(u, u))
-#         final_costs = rho / 2 * jnp.dot(state_err, state_err)
-#         return jnp.where(t == T, final_costs, stage_costs)
-#
-#     X, U, _, _, alpha, lqr_val, _ = optimizers.ilqr(
-#             cost,
-#             dynamics,
-#             x0,
-#             u0,
-#             maxiter=10
-#     )
-#
-#     return X, U, lqr_val
-#
-#     # To use constrained ilqr, uncomment this part of the code and comment above
-#     # def eq_constr(x, u, t):
-#     #     del u
-#     #     def goal_constr(x):
-#     #         err = x[0:2] - r[-1]
-#     #         return err
-#     #     return jnp.where(t == T, goal_constr(x), np.zeros(u0.shape[1]))
-#     #
-#     # sol = optimizers.constrained_ilqr(cost, dynamics, x0, u0, equality_constraint=eq_constr, maxiter_ilqr=10, maxiter_al=10)
-#
-#     # return sol[0], sol[1], None
-
-
-# def run_admm(admm_obj, solver=ctl_prob, u_max=None, u_min=None, tol=1e-2):
-#     """
-#     Function to run admm iterations until desired tolerance is achieved
-#     :param admm_obj: class object that contains details of control problem
-#     :param u_max: maximum input allowed
-#     :param tol: error tolerance for admm iterations
-#     :return:
-#     :param gain_K: gain for converged lqr iteration
-#     :param gain_k: solution from final lqr iteration
-#     :param admm_obj.x: final state trajectory
-#     :param admm_obj.u: final input trajectory
-#     :param admm_obj.r: final reference trajectory
-#     """
-#     T = admm_obj.T
-#     n = admm_obj.n
-#     dynamics = admm_obj.dynamics
-#     x0 = admm_obj.x0
-#     r = np.array(admm_obj.r)
-#     a = np.array(admm_obj.a)
-#     vr = np.array(admm_obj.vr)
-#     vu = np.array(admm_obj.vu)
-#     u = np.array(admm_obj.u)
-#     rho = admm_obj.rho
-#     if n > r.shape[1]:
-#         Tr = admm_obj.Tr
-#     else:
-#         Tr = np.eye(n)
-#     X, U, _ = solver(dynamics, x0, r, a, vr, vu, u, rho, T, Tr)
-#     admm_obj.x = np.array(X)
-#     admm_obj.u = np.array(U)
-#
-#     k = 0
-#     err = 100
-#     start = time.time()
-#     while err >= tol:
-#         k += 1
-#         # update r
-#         admm_obj.solve_reference()
-#         # update x u
-#         prev_x = admm_obj.x
-#         prev_u = admm_obj.u
-#
-#         r = np.array(admm_obj.r)
-#         a = np.array(admm_obj.a)
-#         vr = np.array(admm_obj.vr)
-#         vu = np.array(admm_obj.vu)
-#         u = np.array(admm_obj.u)
-#         rho = admm_obj.rho
-#
-#         if solver is not None:
-#             X, U, lqr_val = solver(dynamics, x0, r, a, vr, vu, u, rho, T, Tr)
-#         else:
-#             X, U, lqr_val = ctl_prob(dynamics, x0, r, a, vr, vu, u, rho, T)
-#         admm_obj.x = np.array(X)
-#         admm_obj.u = np.array(U)
-#
-#         # compute residuals
-#         sxk = admm_obj.rho * (prev_x - admm_obj.x).flatten()
-#         suk = admm_obj.rho * (prev_u - admm_obj.u).flatten()
-#         dual_res_norm = np.linalg.norm(np.hstack([sxk, suk]))
-#         pr_res_norm = np.linalg.norm(admm_obj.r - admm_obj.x @ admm_obj.Tr)
-#
-#         # update rhok and rescale vk
-#         if pr_res_norm > 10 * dual_res_norm:
-#             admm_obj.rho = 2 * admm_obj.rho
-#             admm_obj.vr = admm_obj.vr / 2
-#             admm_obj.vu = admm_obj.vu / 2
-#         elif dual_res_norm > 10 * pr_res_norm:
-#             admm_obj.rho = admm_obj.rho / 2
-#             admm_obj.vr = admm_obj.vr * 2
-#             admm_obj.vu = admm_obj.vu * 2
-#
-#         admm_obj.u = np.where(admm_obj.u >= u_max, u_max, admm_obj.u)
-#         admm_obj.u = np.where(admm_obj.u <= u_min, u_min, admm_obj.u)
-#         admm_obj.vr = admm_obj.vr + admm_obj.r - admm_obj.x @ admm_obj.Tr
-#         admm_obj.vu = admm_obj.vu + admm_obj.a - admm_obj.u
-#
-#         err = np.trace((admm_obj.r - admm_obj.x @ admm_obj.Tr).T @ (admm_obj.r - admm_obj.x @ admm_obj.Tr)) + np.sum(
-#             (admm_obj.a - admm_obj.u).T @ (admm_obj.a - admm_obj.u))
-#
-#     end = time.time()
-#
-#     print("Time", end - start)
-#
-#     Q, Qq, R, Rr, M, A, B = lqr_val
-#     gain_K, gain_k, _, _ = optimizers.tvlqr(Q, Qq, R, Rr, M, A, B, np.zeros((T, n)))
-#     return gain_K, gain_k, admm_obj.x, admm_obj.u, admm_obj.r
-#     # return None, None, admm_obj.x, admm_obj.u, admm_obj.r
 
 
 def test_car(dynamics_model, T, dt, m, n, goal, x0, u0, u_max, u_min, rho, idx, constr=None, filename="car.png"):

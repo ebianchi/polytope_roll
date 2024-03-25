@@ -34,6 +34,7 @@ SCENARIOS = {1: 'Angular Error', 2: 'Position Error Only', 3: 'Minimum Slip'}
 SCENARIOS_SHORT = {1: 'ang_err', 2: 'pos_err_only', 3: 'min_slip'}
 SCENARIO = 3
 SAVE_OUTPUT = False
+ADMM_TOLERANCE = 1e0
 
 # Based on the above settings, generate informative plot titles and file names.
 blurb = SCENARIOS[SCENARIO]
@@ -90,9 +91,17 @@ traj_opt = TwoDTrajectoryOptimization(traj_opt_params)
 pdb.set_trace()
 
 # Test out using ADMM.
-u0 = np.zeros((traj_opt.n_controls,))
-admm = admm_lca(traj_opt, x0, u0, x_goal, rho=0.5)
-admm.solve_reference_gurobi()
-admm.solve_control_gurobi()
+admm = admm_lca(traj_opt, x0, x_goal, rho=0.5, tol=ADMM_TOLERANCE)
+
+TEST_LOOPS = 8
+for _ in range(TEST_LOOPS):
+    admm.solve_reference_gurobi()
+    admm.solve_control_gurobi()
+    admm.construct_LCS_terms_from_inputs()
+    print('\n')
+
+pdb.set_trace()
+
+admm.run_admm()
 
 pdb.set_trace()
