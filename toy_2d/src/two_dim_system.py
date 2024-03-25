@@ -53,7 +53,9 @@ class TwoDimensionalSystem:
 
     def __init__(self, params: TwoDimensionalSystemParams):
         self.params = params
+        self.clear_histories()
 
+    def clear_histories(self):
         # Get the number of contacts and friction cone directions from the
         # system's polytope parameters.
         p = self.params.polytope.n_contacts
@@ -159,18 +161,10 @@ class TwoDimensionalSystem:
         """Set the initial state of the system.  This method will automatically
         clear out the state, control, and contact force histories of the system
         and set the initial state to that provided as an argument."""
-
-        # Get the number of contacts and friction cone directions from the
-        # system's polytope parameters.
-        p = self.params.polytope.n_contacts
-        k = self.params.polytope.n_friction
-        
         # Clear out the histories, setting the first state_history entry to the
         # provided state and emptying the other histories.
+        self.clear_histories()
         self.state_history = state.reshape(1, 6)
-        self.control_history = np.zeros((0, 4))
-        self.lambda_history = np.zeros((0, p*(k+2)))
-        self.output_history = np.zeros((0, p*(k+2)))
 
     def step_dynamics(self, controls):
         """Given new control inputs, step the system forward in time, appending
@@ -246,6 +240,12 @@ class TwoDimensionalSystem:
         output = lcp_mat@lam + lcp_vec.squeeze()
 
         return next_state, lam, output
+
+    def simulate_dynamics_over_horizon(self, controls_over_horizon, init_state):
+        """Given a series of inputs, simulate the system over the horizon."""
+        self.set_initial_state(init_state)
+        for controls in controls_over_horizon:
+            self.step_dynamics(controls)
 
     def convert_input_to_generalized_coords(self, state, controls):
         """Convert an input force and location to forces in the generalized
