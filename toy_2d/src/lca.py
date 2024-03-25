@@ -60,7 +60,7 @@ class admm_lca(object):
     """
     # def __init__(self, dynamics, num_timesteps, dt, x_init, u_init, x_goal, rho,
     #              planning_state_idx=None, constr=None):
-    def __init__(self, traj_opt_object, x_init, u_init, x_goal, rho):
+    def __init__(self, traj_opt_object, x_init, u_init, x_goal, rho, tol):
         assert x_init.ndim == u_init.ndim == x_goal.ndim == 1, 'Expected all ' \
             f'to be of dimension 1: {x_init.ndim=}, {u_init.ndim=}, ' \
             f'{x_goal.ndim=}'
@@ -84,6 +84,8 @@ class admm_lca(object):
         self.traj_opt_object = traj_opt_object
 
         self.rho = rho
+
+        self.tol = tol
 
         # TODO: allow planning states to be subset of true states.  Or not,
         # since this contact rich example requires all states for
@@ -244,7 +246,6 @@ class admm_lca(object):
         except AttributeError:  print('Encountered an attribute error')
         pdb.set_trace()
 
-
     def solve_control_gurobi(self):
         """Build and solve a Gurobi optimization problem for the feedback
         conrol (or "control") layer.  This is just like in traj_opt but without
@@ -328,6 +329,51 @@ class admm_lca(object):
         except AttributeError:  print('Encountered an attribute error')
         pdb.set_trace()
 
+    def run_admm(self):
+        k = 0
+        err = 100
+        start = time.time()
+        while err >= self.tol:
+            k += 1
+            # update r
+            self.solve_reference_gurobi()
+            # update x u
+            prev_x = self.x
+            prev_u = self.u
+
+            self.solve_control_gurobi()
+
+            # compute residuals
+            sxk = self.rho * (prev_x - self.x).flatten()
+            suk = self.rho * (prev_u - self.u).flatten()
+            dual_res_norm = np.linalg.norm(np.hstack([sxk, suk]))
+            pr_res_norm = np.linalg.norm(self.r - self.x @ self.Tr)
+
+            # update rhok and rescale vk
+            if pr_res_norm > 10 * dual_res_norm:
+                self.rho = 2 * self.rho
+                self.vr = self.vr / 2
+                self.vu = self.vu / 2
+                self.vgamma = self.vgamma / 2
+            elif dual_res_norm > 10 * pr_res_norm:
+                self.rho = self.rho / 2
+                self.vr = self.vr * 2
+                self.vu = self.vu * 2
+                self.vgamma = self.vgamma * 2
+
+            # admm_obj.u = np.where(admm_obj.u >= u_max, u_max, admm_obj.u)
+            # admm_obj.u = np.where(admm_obj.u <= u_min, u_min, admm_obj.u)
+            self.vr = self.vr + self.r - self.x @ self.Tr
+            self.vu = self.vu + self.a - self.u
+            self.vgamma = self.vgamma + self.lam - self.gamma + self.vgamma
+
+            err = np.trace(
+                (self.r - self.x @ self.Tr).T @ (self.r - self.x @ self.Tr)) + np.trace(
+                (self.a - self.u).T @ (self.a - self.u)) + np.trace((self.lam - self.gamma + self.vgamma).T @ (self.lam - self.gamma + self.vgamma))
+
+        end = time.time()
+
+        print("Time", end - start)
 
     def rollout(self):
         """
@@ -359,128 +405,128 @@ class admm_lca(object):
         plt.scatter(x[0], x[1], marker='.', s=200, c=col, alpha=col_alpha)
 
 
-# @partial(jax.jit, static_argnums=0)
-def ctl_prob(dynamics, x0, r, a, vr, vu, u0, rho, T, Tr):
-    def cost(x, u, t):
-        # state_err = state_wrap(r[t] - Tr @ x + vr[t])
-        state_err = r[t] - x @ Tr + vr[t]
-        input_err = a[t] - u + vu[t]
-        stage_costs = ((rho / 2) * jnp.dot(state_err, state_err) +
-                           (rho / 2) * jnp.dot(input_err, input_err) + 0.01 * jnp.dot(u, u))
-        final_costs = rho / 2 * jnp.dot(state_err, state_err)
-        return jnp.where(t == T, final_costs, stage_costs)
+# # @partial(jax.jit, static_argnums=0)
+# def ctl_prob(dynamics, x0, r, a, vr, vu, u0, rho, T, Tr):
+#     def cost(x, u, t):
+#         # state_err = state_wrap(r[t] - Tr @ x + vr[t])
+#         state_err = r[t] - x @ Tr + vr[t]
+#         input_err = a[t] - u + vu[t]
+#         stage_costs = ((rho / 2) * jnp.dot(state_err, state_err) +
+#                            (rho / 2) * jnp.dot(input_err, input_err) + 0.01 * jnp.dot(u, u))
+#         final_costs = rho / 2 * jnp.dot(state_err, state_err)
+#         return jnp.where(t == T, final_costs, stage_costs)
+#
+#     X, U, _, _, alpha, lqr_val, _ = optimizers.ilqr(
+#             cost,
+#             dynamics,
+#             x0,
+#             u0,
+#             maxiter=10
+#     )
+#
+#     return X, U, lqr_val
+#
+#     # To use constrained ilqr, uncomment this part of the code and comment above
+#     # def eq_constr(x, u, t):
+#     #     del u
+#     #     def goal_constr(x):
+#     #         err = x[0:2] - r[-1]
+#     #         return err
+#     #     return jnp.where(t == T, goal_constr(x), np.zeros(u0.shape[1]))
+#     #
+#     # sol = optimizers.constrained_ilqr(cost, dynamics, x0, u0, equality_constraint=eq_constr, maxiter_ilqr=10, maxiter_al=10)
+#
+#     # return sol[0], sol[1], None
 
-    X, U, _, _, alpha, lqr_val, _ = optimizers.ilqr(
-            cost,
-            dynamics,
-            x0,
-            u0,
-            maxiter=10
-    )
 
-    return X, U, lqr_val
-
-    # To use constrained ilqr, uncomment this part of the code and comment above
-    # def eq_constr(x, u, t):
-    #     del u
-    #     def goal_constr(x):
-    #         err = x[0:2] - r[-1]
-    #         return err
-    #     return jnp.where(t == T, goal_constr(x), np.zeros(u0.shape[1]))
-    #
-    # sol = optimizers.constrained_ilqr(cost, dynamics, x0, u0, equality_constraint=eq_constr, maxiter_ilqr=10, maxiter_al=10)
-
-    # return sol[0], sol[1], None
-
-
-def run_admm(admm_obj, solver=ctl_prob, u_max=None, u_min=None, tol=1e-2):
-    """
-    Function to run admm iterations until desired tolerance is achieved
-    :param admm_obj: class object that contains details of control problem
-    :param u_max: maximum input allowed
-    :param tol: error tolerance for admm iterations
-    :return:
-    :param gain_K: gain for converged lqr iteration
-    :param gain_k: solution from final lqr iteration
-    :param admm_obj.x: final state trajectory
-    :param admm_obj.u: final input trajectory
-    :param admm_obj.r: final reference trajectory
-    """
-    T = admm_obj.T
-    n = admm_obj.n
-    dynamics = admm_obj.dynamics
-    x0 = admm_obj.x0
-    r = np.array(admm_obj.r)
-    a = np.array(admm_obj.a)
-    vr = np.array(admm_obj.vr)
-    vu = np.array(admm_obj.vu)
-    u = np.array(admm_obj.u)
-    rho = admm_obj.rho
-    if n > r.shape[1]:
-        Tr = admm_obj.Tr
-    else:
-        Tr = np.eye(n)
-    X, U, _ = solver(dynamics, x0, r, a, vr, vu, u, rho, T, Tr)
-    admm_obj.x = np.array(X)
-    admm_obj.u = np.array(U)
-
-    k = 0
-    err = 100
-    start = time.time()
-    while err >= tol:
-        k += 1
-        # update r
-        admm_obj.solve_reference()
-        # update x u
-        prev_x = admm_obj.x
-        prev_u = admm_obj.u
-
-        r = np.array(admm_obj.r)
-        a = np.array(admm_obj.a)
-        vr = np.array(admm_obj.vr)
-        vu = np.array(admm_obj.vu)
-        u = np.array(admm_obj.u)
-        rho = admm_obj.rho
-
-        if solver is not None:
-            X, U, lqr_val = solver(dynamics, x0, r, a, vr, vu, u, rho, T, Tr)
-        else:
-            X, U, lqr_val = ctl_prob(dynamics, x0, r, a, vr, vu, u, rho, T)
-        admm_obj.x = np.array(X)
-        admm_obj.u = np.array(U)
-
-        # compute residuals
-        sxk = admm_obj.rho * (prev_x - admm_obj.x).flatten()
-        suk = admm_obj.rho * (prev_u - admm_obj.u).flatten()
-        dual_res_norm = np.linalg.norm(np.hstack([sxk, suk]))
-        pr_res_norm = np.linalg.norm(admm_obj.r - admm_obj.x @ admm_obj.Tr)
-
-        # update rhok and rescale vk
-        if pr_res_norm > 10 * dual_res_norm:
-            admm_obj.rho = 2 * admm_obj.rho
-            admm_obj.vr = admm_obj.vr / 2
-            admm_obj.vu = admm_obj.vu / 2
-        elif dual_res_norm > 10 * pr_res_norm:
-            admm_obj.rho = admm_obj.rho / 2
-            admm_obj.vr = admm_obj.vr * 2
-            admm_obj.vu = admm_obj.vu * 2
-
-        admm_obj.u = np.where(admm_obj.u >= u_max, u_max, admm_obj.u)
-        admm_obj.u = np.where(admm_obj.u <= u_min, u_min, admm_obj.u)
-        admm_obj.vr = admm_obj.vr + admm_obj.r - admm_obj.x @ admm_obj.Tr
-        admm_obj.vu = admm_obj.vu + admm_obj.a - admm_obj.u
-
-        err = np.trace((admm_obj.r - admm_obj.x @ admm_obj.Tr).T @ (admm_obj.r - admm_obj.x @ admm_obj.Tr)) + np.sum(
-            (admm_obj.a - admm_obj.u).T @ (admm_obj.a - admm_obj.u))
-
-    end = time.time()
-
-    print("Time", end - start)
-
-    Q, Qq, R, Rr, M, A, B = lqr_val
-    gain_K, gain_k, _, _ = optimizers.tvlqr(Q, Qq, R, Rr, M, A, B, np.zeros((T, n)))
-    return gain_K, gain_k, admm_obj.x, admm_obj.u, admm_obj.r
-    # return None, None, admm_obj.x, admm_obj.u, admm_obj.r
+# def run_admm(admm_obj, solver=ctl_prob, u_max=None, u_min=None, tol=1e-2):
+#     """
+#     Function to run admm iterations until desired tolerance is achieved
+#     :param admm_obj: class object that contains details of control problem
+#     :param u_max: maximum input allowed
+#     :param tol: error tolerance for admm iterations
+#     :return:
+#     :param gain_K: gain for converged lqr iteration
+#     :param gain_k: solution from final lqr iteration
+#     :param admm_obj.x: final state trajectory
+#     :param admm_obj.u: final input trajectory
+#     :param admm_obj.r: final reference trajectory
+#     """
+#     T = admm_obj.T
+#     n = admm_obj.n
+#     dynamics = admm_obj.dynamics
+#     x0 = admm_obj.x0
+#     r = np.array(admm_obj.r)
+#     a = np.array(admm_obj.a)
+#     vr = np.array(admm_obj.vr)
+#     vu = np.array(admm_obj.vu)
+#     u = np.array(admm_obj.u)
+#     rho = admm_obj.rho
+#     if n > r.shape[1]:
+#         Tr = admm_obj.Tr
+#     else:
+#         Tr = np.eye(n)
+#     X, U, _ = solver(dynamics, x0, r, a, vr, vu, u, rho, T, Tr)
+#     admm_obj.x = np.array(X)
+#     admm_obj.u = np.array(U)
+#
+#     k = 0
+#     err = 100
+#     start = time.time()
+#     while err >= tol:
+#         k += 1
+#         # update r
+#         admm_obj.solve_reference()
+#         # update x u
+#         prev_x = admm_obj.x
+#         prev_u = admm_obj.u
+#
+#         r = np.array(admm_obj.r)
+#         a = np.array(admm_obj.a)
+#         vr = np.array(admm_obj.vr)
+#         vu = np.array(admm_obj.vu)
+#         u = np.array(admm_obj.u)
+#         rho = admm_obj.rho
+#
+#         if solver is not None:
+#             X, U, lqr_val = solver(dynamics, x0, r, a, vr, vu, u, rho, T, Tr)
+#         else:
+#             X, U, lqr_val = ctl_prob(dynamics, x0, r, a, vr, vu, u, rho, T)
+#         admm_obj.x = np.array(X)
+#         admm_obj.u = np.array(U)
+#
+#         # compute residuals
+#         sxk = admm_obj.rho * (prev_x - admm_obj.x).flatten()
+#         suk = admm_obj.rho * (prev_u - admm_obj.u).flatten()
+#         dual_res_norm = np.linalg.norm(np.hstack([sxk, suk]))
+#         pr_res_norm = np.linalg.norm(admm_obj.r - admm_obj.x @ admm_obj.Tr)
+#
+#         # update rhok and rescale vk
+#         if pr_res_norm > 10 * dual_res_norm:
+#             admm_obj.rho = 2 * admm_obj.rho
+#             admm_obj.vr = admm_obj.vr / 2
+#             admm_obj.vu = admm_obj.vu / 2
+#         elif dual_res_norm > 10 * pr_res_norm:
+#             admm_obj.rho = admm_obj.rho / 2
+#             admm_obj.vr = admm_obj.vr * 2
+#             admm_obj.vu = admm_obj.vu * 2
+#
+#         admm_obj.u = np.where(admm_obj.u >= u_max, u_max, admm_obj.u)
+#         admm_obj.u = np.where(admm_obj.u <= u_min, u_min, admm_obj.u)
+#         admm_obj.vr = admm_obj.vr + admm_obj.r - admm_obj.x @ admm_obj.Tr
+#         admm_obj.vu = admm_obj.vu + admm_obj.a - admm_obj.u
+#
+#         err = np.trace((admm_obj.r - admm_obj.x @ admm_obj.Tr).T @ (admm_obj.r - admm_obj.x @ admm_obj.Tr)) + np.sum(
+#             (admm_obj.a - admm_obj.u).T @ (admm_obj.a - admm_obj.u))
+#
+#     end = time.time()
+#
+#     print("Time", end - start)
+#
+#     Q, Qq, R, Rr, M, A, B = lqr_val
+#     gain_K, gain_k, _, _ = optimizers.tvlqr(Q, Qq, R, Rr, M, A, B, np.zeros((T, n)))
+#     return gain_K, gain_k, admm_obj.x, admm_obj.u, admm_obj.r
+#     # return None, None, admm_obj.x, admm_obj.u, admm_obj.r
 
 
 def test_car(dynamics_model, T, dt, m, n, goal, x0, u0, u_max, u_min, rho, idx, constr=None, filename="car.png"):
