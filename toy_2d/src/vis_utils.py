@@ -5,6 +5,7 @@ import pdb
 import time
 import imageio.v2 as imageio
 import numpy as np
+from PIL import Image
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -17,6 +18,30 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
 
 
 FORCE_SCALING = 1.  # Scaling factor for viewing forces.
+
+"""Save a matplotlib figure to temporary folder."""
+def save_temp_fig(fig, filename):
+    filename = f'{file_utils.TEMP_DIR}/{filename}.png'
+    fig.savefig(filename)
+
+"""Make a gif from png images saved to temp folder."""
+def make_gif_from_temp_images(prefix = None):
+    filenames = sorted([f for f in os.listdir(file_utils.TEMP_DIR)
+                        if f.endswith('.png')])
+    if prefix is not None:
+        filenames = [f for f in filenames if f.startswith(prefix)]
+
+    gif_file = f'{file_utils.OUT_DIR}/{prefix}_{int(time.time())}.gif'
+    with imageio.get_writer(gif_file, mode='I') as writer:
+        for filename in filenames:
+            image = imageio.imread(f'{file_utils.TEMP_DIR}/{filename}')
+            writer.append_data(image)
+
+    print(f'Saved gif at {gif_file}')
+    make_gif_loop(gif_file)
+
+    for filename in filenames:
+        os.remove(f'{file_utils.TEMP_DIR}/{filename}')
 
 """Sometimes the individual frames get loaded as (h, w, 4) RGBA format instead
 of RGB.  Before writing the gif, convert to RGB by dropping the A channel."""
@@ -34,7 +59,7 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
                            save=False, force_scale=1., title=None):
     # Subsample the states and controls to get 10 samples per second of
     # simulated data.
-    step = int(0.1/dt)
+    step = int(0.01/dt)
     if step > 1:
         states = states[0::step]
 
@@ -107,11 +132,12 @@ def animation_gif_polytope(polytope, states, gif_name, dt, controls=None,
             for filename in filenames:
                 image = imageio.imread(filename)
                 writer.append_data(image)
-        fps = 1./dt
+        # fps = 1./dt
         gif = convert_to_rgb(imageio.mimread(gif_file))
-        imageio.mimsave(gif_file, gif, fps=fps)
+        imageio.mimsave(gif_file, gif)  #, fps=fps)
 
         print(f'Saved gif at {gif_file}')
+        make_gif_loop(gif_file)
 
     for filename in set(filenames):
         os.remove(filename)
@@ -178,4 +204,13 @@ def traj_plot(states, controls, plot_name, save=False, costs=None, times=None,
         filename = f'{file_utils.OUT_DIR}/{plot_name}.png'
         plt.savefig(filename)
 
+"""Load an existing gif and ensure it loops indefinitely."""
+def make_gif_loop(gif_file):
+    gif = Image.open(gif_file)
+    new_name = gif_file.replace('.gif', '_.gif')
 
+    # Setting loop equal to zero forces indefinite looping.
+    gif.save(new_name, save_all=True, loop=0)
+    gif.close()
+    # os.remove(gif_file)
+    print(f'Forced gif to loop:  {new_name}')
