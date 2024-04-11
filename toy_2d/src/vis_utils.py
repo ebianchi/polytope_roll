@@ -8,13 +8,9 @@ import numpy as np
 from PIL import Image
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mtick
-from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Polygon
 
 from toy_2d.src import file_utils
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
-                                 TwoDimensionalPolytope
 
 
 FORCE_SCALING = 1.  # Scaling factor for viewing forces.

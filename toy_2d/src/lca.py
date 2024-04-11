@@ -25,6 +25,7 @@ import copy
 import numpy as np
 import jax
 import jax.numpy as jnp
+import os
 from trajax import optimizers
 from trajax.integrators import rk4
 
@@ -37,6 +38,7 @@ import time
 import pdb
 
 from toy_2d.src.optimization_utils import GurobiModelHelper
+from toy_2d.src import file_utils, vis_utils
 
 
 class admm_lca(object):
@@ -45,10 +47,11 @@ class admm_lca(object):
 
     Input arguments
         traj_opt_object: a TwoDTrajectoryOptimization object
-        x_init: initial condition
+        x_init: initial condition, in order [vx, vy, vth, x, y, th].
         x_goal: final state
         rho: ADMM parameter for LCA problem
         tol: ADMM tolerance for terminating iterations
+        T: a matrix to penalize complementarity variables via lam^T@T@lam.
 
     Member functions
         construct_LCS_terms_from_inputs: function to construct the LCS terms
@@ -63,9 +66,7 @@ class admm_lca(object):
         rollout: function to compute state trajectory given initial conditions
             and input
     """
-    # def __init__(self, dynamics, num_timesteps, dt, x_init, u_init, x_goal, rho,
-    #              planning_state_idx=None, constr=None):
-    def __init__(self, traj_opt_object, x_init, x_goal, rho, tol):
+    def __init__(self, traj_opt_object, x_init, x_goal, rho, tol, T):
         assert x_init.ndim == x_goal.ndim == 1, 'Expected all to be of ' \
             f'dimension 1: {x_init.ndim=}, {x_goal.ndim=}'
         assert x_init.shape[0] == x_goal.shape[0] == traj_opt_object.n_state, \
@@ -126,39 +127,31 @@ class admm_lca(object):
         self.constr = None
 
         self.R = self.traj_opt_object.params.R
-
-        # LCS terms to get filled in about a trajectory of states.  For now,
-        # initialize them about the initial state for the full horizon.
-        init_traj = [x_init] * self.N
-        self.As, self.Bs, self.Cs, self.ds, self.Gs, self.Hs, self.Js, \
-            self.ls, self.Ps, self.Qs, self.Rs, self.Ss = \
-            self.traj_opt_object.get_lcs_plus_terms_over_horizon(init_traj)
+        self.Q = self.traj_opt_object.params.Q
+        self.T = T
 
         # To eventually fill in the LCS terms adaptively, will need to simulate
-        # a coarsely-timestepped system that emulates the true (i.e. sim)
-        # system.
-        self.coarse_sim_system = copy.deepcopy(
-            traj_opt_object.params.sim_system)
-        self.coarse_sim_system.params.dt = self.dt
+        # an LCS.
+        self.zero_order_hold_for = 1
+        self.lcs = self.traj_opt_object._construct_lcs(
+            self.traj_opt_object.params.sim_system,
+            self.traj_opt_object.params.traj_opt_dt
+        )
+
+        # LCS terms to get filled in about a trajectory of states.  For now,
+        # initialize them about a trajectory of all zero inputs starting from
+        # the initial state.
+        self.construct_LCS_terms_from_inputs()
+        self.loop_times = []
+        self.plot_trajectories(create=True)
 
     def construct_LCS_terms_from_inputs(self):
-        """Using the stored control inputs in self.u, simulate a coarse system
-        with the inputs to get a trajectory of states.  Use those states as the
+        """Using the stored control inputs in self.u, simulate the LCS with the
+        inputs to get a trajectory of states.  Use those states as the
         linearization knot points for the LCS terms."""
-        # Simulate the coarse system to get the trajectory of states.
-        self.coarse_sim_system.simulate_dynamics_over_horizon(
-            controls_over_horizon=self.u, init_state=self.x_init)
-
-        x_traj = self.coarse_sim_system.state_history
-        assert x_traj.shape == (self.N+1, self.n), f'Expected shape ' \
-            f'{(self.N+1, self.n)}, got {x_traj.shape}'
-        x_traj = x_traj[:-1, :]
-
-        # Get the LCS terms from this state trajectory.
-        self.As, self.Bs, self.Cs, self.ds, self.Gs, self.Hs, self.Js, \
-            self.ls, self.Ps, _Qs, _Rs, _Ss = \
-            self.traj_opt_object.get_lcs_plus_terms_over_horizon(x_traj)
-        print('Updated LCS terms from self.u')
+        self.traj_opt_object._construct_LCS_terms_from_inputs(
+            self.u, self.x_init)
+        self.sim_traj = self.traj_opt_object.sim_traj
 
     def solve_reference_gurobi(self):
         """Build and solve a Gurobi optimization problem for the trajectory
@@ -176,14 +169,11 @@ class admm_lca(object):
         [1] A. Srikanthan, V. Kumar, N. Matni, "Augmented Langrangian Methods as
         Layered Control Architectures," 2023.
         """
-        # TODO: x_current as x_init works for first time, but may need to change
-        # this if doing RHC.
         x_current = self.x_init
 
         # Grab a few variables for convenience.
         mu_control = self.traj_opt_object.params.sim_system.params.mu_control
         input_limit = self.traj_opt_object.params.input_limit
-        use_big_M = self.traj_opt_object.params.use_big_M
 
         # Build a Gurobi optimization model.
         model = GurobiModelHelper.create_optimization_model(
@@ -191,8 +181,6 @@ class admm_lca(object):
         
         # Create variables.
         r = GurobiModelHelper.create_xs(model, lookahead=self.N, n=self.n)
-        r_err = GurobiModelHelper.create_x_errs(model, lookahead=self.N,
-                                                n=self.n)
         a = GurobiModelHelper.create_us(model, lookahead=self.N, nu=self.m,
                                         input_limit=input_limit)
         gamma = GurobiModelHelper.create_lambdas(model, lookahead=self.N,
@@ -201,28 +189,33 @@ class admm_lca(object):
                                         k=self.k)
 
         # Build constraints.  Explicitly exclude the dynamics constraint.
-        # TODO: check if the initial condition constraint is needed / more of a
-        # need to check what x_current should be.
         model = GurobiModelHelper.add_initial_condition_constr(
             model, xs=r, x_current=x_current)
-        model = GurobiModelHelper.add_error_coordinates_constr(
-            model, lookahead=self.N, xs=r, x_errs=r_err, x_goal=self.x_goal)
-        model = GurobiModelHelper.add_complementarity_constr(
-            model, lookahead=self.N, use_big_M=use_big_M, xs=r, us=a,
-            lambdas=gamma, ys=y, p=self.p, k=self.k)
+        # model = GurobiModelHelper.add_complementarity_constr(
+        #     model, lookahead=self.N, use_big_M=use_big_M, xs=r, us=a,
+        #     lambdas=gamma, ys=y, p=self.p, k=self.k)
         model = GurobiModelHelper.add_output_constr(
             model, lookahead=self.N, xs=r, us=a, lambdas=gamma, ys=y, G=self.Gs,
             H=self.Hs, P=self.Ps, J=self.Js, l=self.ls)
         model = GurobiModelHelper.add_friction_cone_constr(
             model, lookahead=self.N, mu_control=mu_control, us=a)
+        model = GurobiModelHelper.add_dynamics_constr(
+            model, lookahead=self.N, xs=r, us=a, lambdas=gamma, A=self.As,
+            B=self.Bs, P=self.Ps, C=self.Cs, d=self.ds)
         
         # Set the model's objective:  use stage cost to encourage smoothness,
         # dual error cost to encourage convergence, and final error to encourage
         # goal progress.
         obj = 0
         for i in range(self.N):
-            stage_err = r[i+1, :] - r[i, :]
-            obj += 0.1 * stage_err @ stage_err
+            input_cost = a[i, :] @ self.R @ a[i, :]
+            obj += input_cost
+
+            # stage_err = r[i+1, :] - r[i, :]
+            # obj += 0.1 * stage_err @ stage_err
+            pdb.set_trace()
+            goal_err = r[i, :] - self.x_goal
+            obj += goal_err @ self.Q @ goal_err
 
             state_dual_err = self.x[i, :]@self.Tr - r[i, :] + self.vr[i, :]
             obj += (self.rho/2) * state_dual_err @ state_dual_err
@@ -233,13 +226,20 @@ class admm_lca(object):
             comp_dual_err = self.lam[i, :] - gamma[i, :] + self.vgamma[i, :]
             obj += (self.rho/2) * comp_dual_err @ comp_dual_err
 
+            # Add penalty for complementarity variables.
+            obj += gamma[i, :] @ self.T @ gamma[i, :]
+
         state_dual_err = self.x[self.N, :]@self.Tr - r[self.N, :] + \
             self.vr[self.N, :]
         obj += (self.rho/2) * state_dual_err @ state_dual_err
 
-        final_err = r[-1, :] - self.x_goal
-        obj += 1000 * final_err @ final_err
+        final_err = r[self.N, :] - self.x_goal
+        obj += 1.0 * final_err @ self.Q @ final_err
         model.setObjective(obj, GRB.MINIMIZE)
+        
+        # Set time limit if desired.
+        if self.params.optimization_time_limit is not None:
+            model.Params.TimeLimit = self.params.optimization_time_limit
         
         # Solve the optimization problem.
         try:
@@ -278,7 +278,9 @@ class admm_lca(object):
         x_current = self.x_init
 
         # Grab a few variables for convenience.
+        mu_control = self.traj_opt_object.params.sim_system.params.mu_control
         input_limit = self.traj_opt_object.params.input_limit
+        use_big_M = self.traj_opt_object.params.use_big_M
 
         # Build a Gurobi optimization model.
         model = GurobiModelHelper.create_optimization_model(
@@ -286,12 +288,12 @@ class admm_lca(object):
 
         # Create variables.
         x = GurobiModelHelper.create_xs(model, lookahead=self.N, n=self.n)
-        x_err = GurobiModelHelper.create_x_errs(model, lookahead=self.N,
-                                                n=self.n)
         u = GurobiModelHelper.create_us(model, lookahead=self.N, nu=self.m,
                                         input_limit=input_limit)
         lam = GurobiModelHelper.create_lambdas(model, lookahead=self.N,
                                                p=self.p, k=self.k)
+        y = GurobiModelHelper.create_ys(model, lookahead=self.N, p=self.p,
+                                        k=self.k)
 
         # Build constraints.  Explicitly exclude any contact-related constraints
         # and include the dynamics constraint.
@@ -299,16 +301,25 @@ class admm_lca(object):
         # need to check what x_current should be.
         model = GurobiModelHelper.add_initial_condition_constr(
             model, xs=x, x_current=x_current)
-        model = GurobiModelHelper.add_error_coordinates_constr(
-            model, lookahead=self.N, xs=x, x_errs=x_err, x_goal=self.x_goal)
-        model = GurobiModelHelper.add_dynamics_constr(
-            model, lookahead=self.N, xs=x, us=u, lambdas=lam, A=self.As,
-            B=self.Bs, P=self.Ps, C=self.Cs, d=self.ds)
+        # model = GurobiModelHelper.add_dynamics_constr(
+        #     model, lookahead=self.N, xs=x, us=u, lambdas=lam, A=self.As,
+        #     B=self.Bs, P=self.Ps, C=self.Cs, d=self.ds)
+        model = GurobiModelHelper.add_complementarity_constr(
+            model, lookahead=self.N, use_big_M=use_big_M, xs=x, us=u,
+            lambdas=lam, ys=y, p=self.p, k=self.k)
+        model = GurobiModelHelper.add_output_constr(
+            model, lookahead=self.N, xs=x, us=u, lambdas=lam, ys=y, G=self.Gs,
+            H=self.Hs, P=self.Ps, J=self.Js, l=self.ls)
+        model = GurobiModelHelper.add_friction_cone_constr(
+            model, lookahead=self.N, mu_control=mu_control, us=u)
 
         # Set the model's objective:  use dual error cost to encourage,
         # convergence, and control cost to encourage efficiency.
         obj = 0
         for i in range(self.N):
+            stage_err = 0.1 * (x[i+1, :] - x[i, :])
+            obj += stage_err @ stage_err
+
             input_cost = u[i, :] @ self.R @ u[i, :]
             obj += input_cost
 
@@ -321,11 +332,18 @@ class admm_lca(object):
             comp_dual_err = lam[i, :] - self.gamma[i, :] + self.vgamma[i, :]
             obj += (self.rho/2) * comp_dual_err @ comp_dual_err
 
+            # Add penalty for complementarity variables.
+            obj += lam[i, :] @ self.T @ lam[i, :]
+
         state_dual_err = x[self.N, :]@self.Tr - self.r[self.N, :] + \
             self.vr[self.N, :]
         obj += (self.rho/2) * state_dual_err @ state_dual_err
 
         model.setObjective(obj, GRB.MINIMIZE)
+        
+        # Set time limit if desired.
+        if self.params.optimization_time_limit is not None:
+            model.Params.TimeLimit = self.params.optimization_time_limit
 
         # Solve the optimization problem.
         try:
@@ -344,13 +362,140 @@ class admm_lca(object):
         except AttributeError:  print('Encountered an attribute error')
         pdb.set_trace()
 
+    def plot_trajectories(self, loop: int = 0, create: bool = False,
+                          save: bool = True):
+        x_goal = self.x_goal[3]
+        y_goal = self.x_goal[4]
+        th_goal = self.x_goal[5]
+
+        states = self.x
+        xs, ys, ths = states[:, 3], states[:, 4], states[:, 5]
+
+        controls = self.u
+        uns, uts = controls[:, 0], controls[:, 1]
+
+        d_states = self.r
+        rxs, rys, rths = d_states[:, 3], d_states[:, 4], d_states[:, 5]
+
+        d_controls = self.a
+        ans, ats = d_controls[:, 0], d_controls[:, 1]
+
+        s_states = self.sim_traj
+        sxs, sys, sths = s_states[:, 3], s_states[:, 4], s_states[:, 5]
+
+        if create:
+            file_utils.clear_temp_dir()
+            self.plot = {}
+
+            plt.ion()
+            self.fig = plt.figure(figsize=(9.16, 10.81))
+            self.fig.suptitle(f'Iteration {loop}')
+
+            self.ax1 = self.fig.add_subplot(321)
+            self.plot['xs'] = self.ax1.plot(xs, label='Control')
+            self.plot['rxs'] = self.ax1.plot(rxs, label='Reference')
+            self.plot['sxs'] = self.ax1.plot(sxs, label='Simulated')
+            self.ax1.plot([0, self.N], [x_goal, x_goal], 'r--', label='Target')
+            self.ax1.set_ylabel('Meters')
+            self.ax1.set_title('X direction')
+            self.ax1.legend()
+
+            self.ax2 = self.fig.add_subplot(323)
+            self.plot['ys'] = self.ax2.plot(ys)
+            self.plot['rys'] = self.ax2.plot(rys)
+            self.plot['sys'] = self.ax2.plot(sys)
+            self.ax2.plot([0, self.N], [y_goal, y_goal], 'r--')
+            self.ax2.set_ylabel('Meters')
+            self.ax2.set_title('Y direction')
+
+            self.ax3 = self.fig.add_subplot(325)
+            self.plot['ths'] = self.ax3.plot(ths)
+            self.plot['rths'] = self.ax3.plot(rths)
+            self.plot['sths'] = self.ax3.plot(sths)
+            self.ax3.plot([0, self.N], [th_goal, th_goal], 'r--')
+            self.ax3.set_ylabel('Radians')
+            self.ax3.set_title('Z rotation')
+
+            self.ax4 = self.fig.add_subplot(322)
+            self.plot['uns'] = self.ax4.plot(uns, label='un')
+            self.plot['ans'] = self.ax4.plot(ans, label='an')
+            self.ax4.set_ylabel('Newtons')
+            self.ax4.set_title('Normal direction')
+
+            self.ax5 = self.fig.add_subplot(324)
+            self.plot['uts'] = self.ax5.plot(uts, label='ut')
+            self.plot['ats'] = self.ax5.plot(ats, label='at')
+            self.ax5.set_ylabel('Newtons')
+            self.ax5.set_title('Tangential direction')
+
+            self.ax6 = self.fig.add_subplot(326)
+            self.plot['times'] = self.ax6.plot(self.loop_times)
+            self.ax6.set_ylabel('Seconds')
+            self.ax6.set_title('ADMM Iteration times')
+            self.ax6.set_yscale('log')
+            if self.params.optimization_time_limit is not None:
+                tlim = self.params.optimization_time_limit
+                self.plot['time_limit'] = self.ax6.plot(
+                    [0, 1], [tlim, tlim], 'r--', label='Limit')
+                self.ax6.legend()
+
+
+        else:
+            self.fig.suptitle(f'Iteration {loop}')
+
+            self.plot['xs'][0].set_ydata(xs)
+            self.plot['rxs'][0].set_ydata(rxs)
+            self.plot['sxs'][0].set_ydata(sxs)
+
+            self.plot['ys'][0].set_ydata(ys)
+            self.plot['rys'][0].set_ydata(rys)
+            self.plot['sys'][0].set_ydata(sys)
+
+            self.plot['ths'][0].set_ydata(ths)
+            self.plot['rths'][0].set_ydata(rths)
+            self.plot['sths'][0].set_ydata(sths)
+
+            self.plot['uns'][0].set_ydata(uns)
+            self.plot['ans'][0].set_ydata(ans)
+
+            self.plot['uts'][0].set_ydata(uts)
+            self.plot['ats'][0].set_ydata(ats)
+
+            self.plot['times'][0].set_xdata(range(len(self.loop_times)))
+            self.plot['times'][0].set_ydata(self.loop_times)
+            if self.params.optimization_time_limit is not None:
+                self.plot['time_limit'][0].set_xdata([0, len(self.loop_times)])
+
+            self.ax1.relim()
+            self.ax2.relim()
+            self.ax3.relim()
+            self.ax4.relim()
+            self.ax5.relim()
+            self.ax6.relim()
+            self.ax1.autoscale(enable=True, axis="y")
+            self.ax2.autoscale(enable=True, axis="y")
+            self.ax3.autoscale(enable=True, axis="y")
+            self.ax4.autoscale(enable=True, axis="y")
+            self.ax5.autoscale(enable=True, axis="y")
+            self.ax6.autoscale(enable=True, axis="both")
+
+        if save:
+            vis_utils.save_temp_fig(self.fig, f'admm_{loop:05d}')
+
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+        # pdb.set_trace()
+
     def run_admm(self):
         k = 0
         err = 100
         start = time.time()
+
         while err >= self.tol:
+            loop_start = time.time()
             k += 1
             # update r
+            # if k % 1 == 1:
             self.solve_reference_gurobi()
             # update x u
             prev_x = self.x
@@ -384,8 +529,6 @@ class admm_lca(object):
                 self.vu = self.vu * 2
                 self.vgamma = self.vgamma * 2
 
-            # admm_obj.u = np.where(admm_obj.u >= u_max, u_max, admm_obj.u)
-            # admm_obj.u = np.where(admm_obj.u <= u_min, u_min, admm_obj.u)
             self.vr = self.vr + self.x @ self.Tr - self.r
             self.vu = self.vu + self.u - self.a
             self.vgamma = self.vgamma + self.lam - self.gamma
@@ -400,87 +543,17 @@ class admm_lca(object):
                 )
 
             print(f'ERROR: {err}\n\n=== ', end='')
+            self.loop_times.append(time.time() - loop_start)
+            self.plot_trajectories(loop=k, save=True)
 
         end = time.time()
 
         print("Time", end - start)
+        pdb.set_trace()
+        self.make_gif_from_temp_images()
 
-    def rollout(self):
-        """
-        Member function to compute state trajectory
-        """
-        self.x[0] = self.x_init
-        for t in range(self.N - 1):
-            self.x[t + 1] = self.dynamics(self.x[t], self.u[t], t)
-        return self.x
-
-    def plot_car(self, car_len, i=None, num_plots=None, col='black', col_alpha=1):
-        w = car_len / 2
-        x = np.zeros(self.n)
-        if num_plots == -1:
-            x[0:2] = self.x_goal[:2]
-            x[2] = 0
-        else:
-            x[0:2] = self.x[int(i * (self.N+1)/num_plots), :2]
-            if self.n == 5:
-                x[2] = self.x[int(i * (self.N+1)/num_plots), 4]
-            else:
-                x[2] = self.x[int(i * (self.N+1)/num_plots), 2]
-        x_rl = x[:2] + 0.5 * w * np.array([-np.sin(x[2]), np.cos(x[2])])
-        x_rr = x[:2] - 0.5 * w * np.array([-np.sin(x[2]), np.cos(x[2])])
-        x_fl = x_rl + car_len * np.array([np.cos(x[2]), np.sin(x[2])])
-        x_fr = x_rr + car_len * np.array([np.cos(x[2]), np.sin(x[2])])
-        x_plot = np.concatenate((x_rl, x_rr, x_fr, x_fl, x_rl))
-        plt.plot(x_plot[0::2], x_plot[1::2], linewidth=2, c=col, alpha=col_alpha)
-        plt.scatter(x[0], x[1], marker='.', s=200, c=col, alpha=col_alpha)
-
-
-
-def test_car(dynamics_model, T, dt, m, n, goal, x0, u0, u_max, u_min, rho, idx, constr=None, filename="car.png"):
-    """
-    Function to test LCA on a dynamics simulation of a car
-    :param dynamics_model: Specified dynamics model
-    :param T: time horizon
-    :param dt: discretization time
-    :param m: input dimension
-    :param n: state dimension
-    :param goal: goal
-    :param x0: initial state
-    :param u0: initial input trajectory
-    :param u_max: maximum allowable inputs
-    :param rho: initial admm parameter
-    :param constr: state constraints
-    :return: None
-    """
-    # Discretize unicycle using rk4 - simple dynamics
-    dynamics = rk4(dynamics_model, dt=dt)
-    admm_obj = admm_lca(dynamics, T, dt, m, n, x0, u0, goal, rho, idx, constr)
-
-    gain_K, gain_k, x, u, r = run_admm(admm_obj, ctl_prob, u_max, u_min)
-
-    # Plotting figures
-    # ==================================================================================================================
-    plt.figure()
-    # plt.axis("off")
-    plt.gca().set_aspect('equal', adjustable='box')
-
-    car_len = 0.25
-    nb_plots = 15
-    for i in range(nb_plots):
-        admm_obj.plot_car(car_len, i, nb_plots, 'black', 0.1 + 0.9 * i / nb_plots)
-    admm_obj.plot_car(car_len, -1, T + 1, 'black')
-    admm_obj.plot_car(car_len, -1, -1, 'red')
-    x = admm_obj.rollout()
-    plt.plot(x[:, 0], x[:, 1], c='black')
-    plt.scatter(admm_obj.x_goal[0], admm_obj.x_goal[1], color='r', marker='.', s=200, label="Desired pose")
-    if constr:
-        plt.plot(np.array([1, 1]), np.array([0, 1.5]), color='b', linewidth=4)
-        plt.plot(np.array([1, 4]), np.array([1.5, 1.5]), color='b', linewidth=4)
-        plt.plot(np.array([0, 0]), np.array([0, 2.5]), color='b', linewidth=4)
-        plt.plot(np.array([0, 4]), np.array([2.5, 2.5]), color='b', linewidth=4)
-    plt.legend()
-    plt.savefig("../examples/"+filename)
-    plt.show()
+    def make_gif_from_temp_images(self):
+        vis_utils.make_gif_from_temp_images(prefix='admm')
 
 
 def main():

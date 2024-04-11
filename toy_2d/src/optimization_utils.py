@@ -51,14 +51,15 @@ class GurobiModelHelper:
     
     @staticmethod
     def set_objective(
-        model, lookahead=None, Q=None, R=None, S=None, x_errs=None, us=None,
-        xs=None
+        model, lookahead=None, Q=None, R=None, S=None, xs=None, x_goal=None,
+        us=None
     ):
         obj = 0
         for i in range(lookahead):
-            obj += x_errs[i, :] @ Q @ x_errs[i, :]
-            obj += us[i, :] @ R @ us[i, :]
-            obj += xs[i, :] @ S @ xs[i, :]
+            x_err = xs[i+1, :] - x_goal
+            obj += x_err @ Q[i] @ x_err
+            obj += us[i, :] @ R[i] @ us[i, :]
+            obj += xs[i, :] @ S[i] @ xs[i, :]
         model.setObjective(obj, GRB.MINIMIZE)
         return model
     

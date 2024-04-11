@@ -1,4 +1,4 @@
-"""This file is a different implementation of the TwoDTrajectoryOptimization
+"""This file is a different implementation of the TwoDRecedingHorizonControl
 functionality that tests the trajectory optimization formulation where the
 control force is constrained to be normal to the polytope face at a fixed
 contact point.

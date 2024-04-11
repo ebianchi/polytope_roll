@@ -1,5 +1,5 @@
 """This file sets up a receding horizon model predictive control scenario,
-constructed via the TwoDTrajectoryOptimization class.  This example defines a
+constructed via the TwoDRecedingHorizonControl class.  This example defines a
 square polytope of half width = 1 meter.  The SCENARIO parameter can be toggled
 between 1, 2, and 3 to determine if the result will include angular error but no
 penalty of slipping, position error only still without slipping penalty, or
@@ -13,9 +13,9 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams
 from toy_2d.src.two_dim_system import TwoDSystemForceOnly
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
-from toy_2d.src.two_dim_traj_opt import TrajectoryOptimizationReport, \
-                                        TwoDTrajectoryOptimizationParams, \
-                                        TwoDTrajectoryOptimization
+from toy_2d.src.two_dim_trajectory_optimization import \
+    TwoDTrajectoryOptimizationParams, TwoDTrajectoryOptimization#, \
+    # TwoDRecedingHorizonControl
 
 
 # Set some parameters.
@@ -31,8 +31,8 @@ USE_BIG_M = False
 USE_NON_CONVEX = not USE_BIG_M
 SCENARIOS = {1: 'Angular Error', 2: 'Position Error Only', 3: 'Minimum Slip'}
 SCENARIOS_SHORT = {1: 'ang_err', 2: 'pos_err_only', 3: 'min_slip'}
-SCENARIO = 3
-SAVE_OUTPUT = False
+SCENARIO = 1
+SAVE_OUTPUT = True
 
 # Based on the above settings, generate informative plot titles and file names.
 blurb = SCENARIOS[SCENARIO]
@@ -52,7 +52,7 @@ CONTACT_ANGLE = np.pi
 
 # Initial and goal conditions, in order of vx, vy, vth, x, y, th.
 x0 = np.array([0., 0., 0., 0., 1., 0.])
-x_goal = np.array([0., 0., 0., -4.5, 1., np.pi])
+x_goal = np.array([0., 0., 0., -4.5, 1., 0.])  #np.pi])
 
 # Create a polytope.
 poly_params = TwoDimensionalPolytopeParams(mass = 1, moment_inertia = 0.01,
@@ -83,15 +83,16 @@ elif SCENARIOS[SCENARIO] == 'Minimum Slip':
 
 # Create trajectory optimization object.
 traj_opt_params = TwoDTrajectoryOptimizationParams(sim_system=sim_system,
-    traj_opt_dt=DT_TRAJ_OPT, Q=Q, R=R, S_base=S_base)
-traj_opt = TwoDTrajectoryOptimization(traj_opt_params)
+    traj_opt_dt=DT_TRAJ_OPT, Q=Q, R=R, S_base=S_base, lookahead=LOOKAHEAD,
+    use_receding_horizon=True)
+rhc_mpc = TwoDTrajectoryOptimization(traj_opt_params)
 
 pdb.set_trace()
 
 # Perform the trajectory optimization.
-traj_opt.run_trajectory_optimization(x0, x_goal, LOOPS)
+rhc_mpc.run_trajectory_optimization(x0, x_goal, LOOPS)
 
 # Generate a plot of the simulated rollout.
-traj_opt.generate_visuals_from_latest_report(file_title=file_title, title=title,
+rhc_mpc.generate_visuals_from_latest_report(file_title=file_title, title=title,
                                             save=SAVE_OUTPUT)
 pdb.set_trace()
