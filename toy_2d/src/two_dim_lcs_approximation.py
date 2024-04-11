@@ -7,6 +7,7 @@ import numpy as np
 import pdb
 
 from toy_2d.src.two_dim_system import TwoDimensionalSystem
+from toy_2d.src import solver_utils
 
 
 class TwoDSystemLCSApproximation:
@@ -571,7 +572,45 @@ class TwoDSystemLCSApproximation:
         self.lambda_history = np.zeros((0, p*(k+2)))
         self.output_history = np.zeros((0, p*(k+2)))
 
-    def step_lcs_dynamics(self, controls, lamda_k):
+    def simulate_dynamics_over_horizon(
+            self, controls_over_horizon, init_state,
+            zero_order_hold_for: int = 1, roll_out_lcs: bool = False):
+        """Given a series of inputs, simulate the LCS over the horizon, rolling
+        out the LCS if desired.  Can optionally specify a number of timesteps to
+        hold each control input if a planned series of control inputs was
+        specified with a larger timestep."""
+        self.set_initial_state(init_state)
+        self.set_linearization_point(init_state[3:], init_state[:3],
+                                     controls_over_horizon[0])
+        for controls in controls_over_horizon:
+            if roll_out_lcs:
+                current_state = self.state_history[-1, :]
+                q = current_state[3:]
+                v = current_state[:3]
+                self.set_linearization_point(q, v, controls)
+            for _ in range(zero_order_hold_for):
+                lambda_k = self.compute_lambda(controls)
+                self.step_lcs_dynamics(controls, lambda_k)
+
+    def compute_lambda(self, controls):
+        """From the current state and provided controls, find the lambda vector
+        that satisfies the LCP 0 <= lambda \perp Gx + Hu + Jlambda + l >= 0."""
+        # Check that the histories are consistent.
+        self.__check_consistent_histories()
+
+        # Get the current state and step the dynamics.
+        state = self.state_history[-1, :]
+
+        # Get all the LCS terms.
+        _A, _B, _C, _d, G, H, J, l, P = self.get_lcs_terms()
+
+        # The LCP matrix is J while the LCP vector contains Gx + HPu + l.
+        lcp_mat = J
+        lcp_vec = G @ state + H @ P @ controls + l
+
+        return solver_utils.solve_lcp(lcp_mat, lcp_vec)
+
+    def step_lcs_dynamics(self, controls, lambda_k):
         """Given new control inputs and contact forces, step the system forward
         in time, appending the next state, provided controls, and provided
         contact forces to the end of the state and control history arrays,
@@ -582,16 +621,17 @@ class TwoDSystemLCSApproximation:
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state, yk = self.__step_lcs_dynamics(state, controls, lamda_k)
+        next_state, yk = self.__step_lcs_dynamics(state, controls, lambda_k)
 
         # Convert the controls to full controls.
-        full_control = self.system.get_full_controls(state, controls)
+        system_state = self._convert_lcs_state_to_system_state(state)
+        full_control = self.system.get_full_controls(system_state, controls)
 
         # Set the state and control histories.
         self.state_history = np.vstack((self.state_history, next_state))
         self.full_control_history = np.vstack((self.full_control_history,
                                                full_control))
-        self.lambda_history = np.vstack((self.lambda_history, lamda_k))
+        self.lambda_history = np.vstack((self.lambda_history, lambda_k))
         self.output_history = np.vstack((self.output_history, yk))
 
     def __step_lcs_dynamics(self, state, controls, lambda_k):
@@ -608,10 +648,7 @@ class TwoDSystemLCSApproximation:
         # Get all the LCS terms.
         A, B, C, d, G, H, J, l, P = self.get_lcs_terms()
 
-        # # Convert the control force and location to generalized coordinates.
-        # state_sys = self._convert_lcs_state_to_system_state(state)
-        # u = self.convert_input_to_generalized_coords(state_sys, controls)
-        # P = self.get_P_matrix(state, controls)
+        # Convert the control input to generalized coordinates.
         x = state
         u = P @ controls
 

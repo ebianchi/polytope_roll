@@ -24,3 +24,7 @@ def assure_created(directory: str) -> str:
 ROOT_DIR = op.dirname(op.dirname(op.abspath(__file__)))
 TEMP_DIR = assure_created(op.join(ROOT_DIR, 'tmp'))
 OUT_DIR = assure_created(op.join(ROOT_DIR, 'out'))
+
+def clear_temp_dir():
+    for f in os.listdir(TEMP_DIR):
+        os.remove(op.join(TEMP_DIR, f))

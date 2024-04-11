@@ -241,11 +241,16 @@ class TwoDimensionalSystem:
 
         return next_state, lam, output
 
-    def simulate_dynamics_over_horizon(self, controls_over_horizon, init_state):
-        """Given a series of inputs, simulate the system over the horizon."""
+    def simulate_dynamics_over_horizon(self, controls_over_horizon, init_state,
+                                       zero_order_hold_for: int = 1):
+        """Given a series of inputs, simulate the system over the horizon.  Can
+        optionally specify a number of timesteps to hold each control input if a
+        planned series of control inputs was specified with a larger timestep.
+        """
         self.set_initial_state(init_state)
         for controls in controls_over_horizon:
-            self.step_dynamics(controls)
+            for _ in range(zero_order_hold_for):
+                self.step_dynamics(controls)
 
     def convert_input_to_generalized_coords(self, state, controls):
         """Convert an input force and location to forces in the generalized
