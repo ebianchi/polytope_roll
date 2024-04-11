@@ -355,6 +355,7 @@ class admm_lca(object):
             # update x u
             prev_x = self.x
             prev_u = self.u
+            prev_gamma = self.gamma
 
             self.solve_control_gurobi()
 
@@ -364,8 +365,9 @@ class admm_lca(object):
             # compute residuals
             sxk = self.rho * (prev_x - self.x).flatten()
             suk = self.rho * (prev_u - self.u).flatten()
-            dual_res_norm = np.linalg.norm(np.hstack([sxk, suk]))
-            pr_res_norm = np.linalg.norm(self.r - self.x @ self.Tr)
+            sgammak = self.rho * (prev_gamma - self.gamma).flatten()
+            dual_res_norm = np.linalg.norm(np.hstack([sxk, suk, sgammak]))
+            pr_res_norm = np.linalg.norm(self.r - self.x @ self.Tr) + np.linalg.norm(self.a - self.u) + np.linalg.norm(self.gamma - self.lam)
 
             # update rhok and rescale vk
             if pr_res_norm > 10 * dual_res_norm:
