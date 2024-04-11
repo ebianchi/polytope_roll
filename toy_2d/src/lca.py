@@ -355,7 +355,7 @@ class admm_lca(object):
             # update x u
             prev_x = self.x
             prev_u = self.u
-            prev_gamma = self.gamma
+            prev_lambda = self.lam
 
             self.solve_control_gurobi()
 
@@ -365,8 +365,8 @@ class admm_lca(object):
             # compute residuals
             sxk = self.rho * (prev_x - self.x).flatten()
             suk = self.rho * (prev_u - self.u).flatten()
-            sgammak = self.rho * (prev_gamma - self.gamma).flatten()
-            dual_res_norm = np.linalg.norm(np.hstack([sxk, suk, sgammak]))
+            slambdak = self.rho * (prev_lambda - self.lam).flatten()
+            dual_res_norm = np.linalg.norm(np.hstack([sxk, suk, slambdak]))
             rxk = np.linalg.norm(self.r - self.x @ self.Tr)
             auk = np.linalg.norm(self.a - self.u)
             gammalamk = np.linalg.norm(self.gamma - self.lam)
@@ -386,13 +386,18 @@ class admm_lca(object):
 
             # admm_obj.u = np.where(admm_obj.u >= u_max, u_max, admm_obj.u)
             # admm_obj.u = np.where(admm_obj.u <= u_min, u_min, admm_obj.u)
-            self.vr = self.vr + self.r - self.x @ self.Tr
-            self.vu = self.vu + self.a - self.u
-            self.vgamma = self.vgamma + self.lam - self.gamma + self.vgamma
+            self.vr = self.vr + self.x @ self.Tr - self.r
+            self.vu = self.vu + self.u - self.a
+            self.vgamma = self.vgamma + self.lam - self.gamma
 
-            err = np.trace(
-                (self.r - self.x @ self.Tr).T @ (self.r - self.x @ self.Tr)) + np.trace(
-                (self.a - self.u).T @ (self.a - self.u)) + np.trace((self.lam - self.gamma + self.vgamma).T @ (self.lam - self.gamma + self.vgamma))
+            err = \
+                np.trace(
+                    (self.r - self.x @ self.Tr).T @ (self.r - self.x @ self.Tr)
+                ) + np.trace(
+                    (self.a - self.u).T @ (self.a - self.u)
+                ) + np.trace(
+                    (self.gamma - self.lam).T @ (self.gamma - self.lam)
+                )
 
             print(f'ERROR: {err}\n\n=== ', end='')
 
