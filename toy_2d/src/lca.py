@@ -512,9 +512,9 @@ class admm_lca(object):
             suk = self.rho * (prev_u - self.u).flatten()
             slambdak = self.rho * (prev_lambda - self.lam).flatten()
             dual_res_norm = np.linalg.norm(np.hstack([sxk, suk, slambdak]))
-            rxk = np.linalg.norm(self.r - self.x @ self.Tr)
-            auk = np.linalg.norm(self.a - self.u)
-            gammalamk = np.linalg.norm(self.gamma - self.lam)
+            rxk = (self.r - self.x @ self.Tr).flatten()
+            auk = (self.a - self.u).flatten()
+            gammalamk = (self.gamma - self.lam).flatten()
             pr_res_norm = np.linalg.norm(np.hstack([rxk, auk, gammalamk]))
 
             # update rhok and rescale vk
