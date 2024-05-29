@@ -78,6 +78,8 @@ class admm_lca(object):
         self.dt = traj_opt_object.params.traj_opt_dt
         self.x_init = x_init
         self.x_goal = x_goal
+        self.optimization_time_limit = \
+            traj_opt_object.params.optimization_time_limit
 
         self.N = traj_opt_object.params.lookahead
         self.n = traj_opt_object.n_state
@@ -153,6 +155,19 @@ class admm_lca(object):
             self.u, self.x_init)
         self.sim_traj = self.traj_opt_object.sim_traj
 
+        self.As = self.traj_opt_object.As
+        self.Bs = self.traj_opt_object.Bs
+        self.Cs = self.traj_opt_object.Cs
+        self.ds = self.traj_opt_object.ds
+        self.Gs = self.traj_opt_object.Gs
+        self.Hs = self.traj_opt_object.Hs
+        self.Js = self.traj_opt_object.Js
+        self.ls = self.traj_opt_object.ls
+        self.Ps = self.traj_opt_object.Ps
+        self.Qs = self.traj_opt_object.Qs
+        self.Rs = self.traj_opt_object.Rs
+        self.Ss = self.traj_opt_object.Ss
+
     def solve_reference_gurobi(self):
         """Build and solve a Gurobi optimization problem for the trajectory
         generation (or "reference") layer.  This is just like in traj_opt but
@@ -213,7 +228,6 @@ class admm_lca(object):
 
             # stage_err = r[i+1, :] - r[i, :]
             # obj += 0.1 * stage_err @ stage_err
-            pdb.set_trace()
             goal_err = r[i, :] - self.x_goal
             obj += goal_err @ self.Q @ goal_err
 
@@ -238,8 +252,8 @@ class admm_lca(object):
         model.setObjective(obj, GRB.MINIMIZE)
         
         # Set time limit if desired.
-        if self.params.optimization_time_limit is not None:
-            model.Params.TimeLimit = self.params.optimization_time_limit
+        if self.optimization_time_limit is not None:
+            model.Params.TimeLimit = self.optimization_time_limit
         
         # Solve the optimization problem.
         try:
@@ -342,8 +356,8 @@ class admm_lca(object):
         model.setObjective(obj, GRB.MINIMIZE)
         
         # Set time limit if desired.
-        if self.params.optimization_time_limit is not None:
-            model.Params.TimeLimit = self.params.optimization_time_limit
+        if self.optimization_time_limit is not None:
+            model.Params.TimeLimit = self.optimization_time_limit
 
         # Solve the optimization problem.
         try:
@@ -433,8 +447,8 @@ class admm_lca(object):
             self.ax6.set_ylabel('Seconds')
             self.ax6.set_title('ADMM Iteration times')
             self.ax6.set_yscale('log')
-            if self.params.optimization_time_limit is not None:
-                tlim = self.params.optimization_time_limit
+            if self.optimization_time_limit is not None:
+                tlim = self.optimization_time_limit
                 self.plot['time_limit'] = self.ax6.plot(
                     [0, 1], [tlim, tlim], 'r--', label='Limit')
                 self.ax6.legend()
@@ -463,8 +477,8 @@ class admm_lca(object):
 
             self.plot['times'][0].set_xdata(range(len(self.loop_times)))
             self.plot['times'][0].set_ydata(self.loop_times)
-            if self.params.optimization_time_limit is not None:
-                self.plot['time_limit'][0].set_xdata([0, len(self.loop_times)])
+            if self.optimization_time_limit is not None:
+                self.plot['time_limit'][0].set_xdata([0, len(self.loop_times)-1])
 
             self.ax1.relim()
             self.ax2.relim()
@@ -533,6 +547,9 @@ class admm_lca(object):
             self.vu = self.vu + self.u - self.a
             self.vgamma = self.vgamma + self.lam - self.gamma
 
+            # Calculate the error as the difference between the planned states
+            # and the control states, as well as the difference between the
+            # control states and the simulated states.
             err = \
                 np.trace(
                     (self.r - self.x @ self.Tr).T @ (self.r - self.x @ self.Tr)
@@ -540,6 +557,8 @@ class admm_lca(object):
                     (self.a - self.u).T @ (self.a - self.u)
                 ) + np.trace(
                     (self.gamma - self.lam).T @ (self.gamma - self.lam)
+                ) + np.trace(
+                    (self.x - self.sim_traj).T @ (self.x - self.sim_traj)
                 )
 
             print(f'ERROR: {err}\n\n=== ', end='')

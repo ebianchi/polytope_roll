@@ -212,9 +212,11 @@ class TwoDTrajectoryOptimization:
         linearized about the produced state trajectory."""
 
         def compute_trajectory_error(traj_1, traj_2):
-            """Given two trajectories, compute the error between them."""
+            """Given two trajectories, compute the average error between them
+            per timestep."""
             assert traj_1.shape == traj_2.shape == (self.N+1, self.n_state), \
-                f'Expected shape {traj_1.shape}, got {traj_2.shape}.'
+                f'Expected shape ({self.N+1}, {self.n_state}), got ' + \
+                f' {traj_1.shape} and {traj_2.shape}.'
             
             Q = self.params.Q
             
@@ -234,11 +236,12 @@ class TwoDTrajectoryOptimization:
         plan_states = np.tile(self.x_goal, (self.N+1, 1))
 
         # Compute the initial trajectory error.
+        loops = 0
         traj_errors = np.array([
             compute_trajectory_error(sim_states, plan_states)])
+        print(f'{loops} Trajectory error: {traj_errors[-1]}')
         
         # Make first plot.
-        loops = 0
         self.plot_trajectories(
             loop=loops, inputs=inputs, sim_states=sim_states, times=times,
             plan_states=plan_states, create=True
@@ -248,6 +251,7 @@ class TwoDTrajectoryOptimization:
         while traj_errors[-1] > 1e-1:
             # Start timer.
             start_time = timeit.default_timer()
+            loops += 1
 
             # Update the LCS terms based on the current set of inputs.
             self._construct_LCS_terms_from_inputs(inputs, x_init)
@@ -263,7 +267,6 @@ class TwoDTrajectoryOptimization:
             # Compute the differences between the plan and simulation states.
             traj_error = compute_trajectory_error(sim_states, plan_states)
             print(f'{loops} Trajectory error: {traj_error}')
-            loops += 1
 
             # Save the objective cost and trajectory errors.
             costs = np.hstack((costs, cost))
@@ -580,7 +583,6 @@ class TwoDTrajectoryOptimization:
                     [0, 1], [tlim, tlim], 'r--', label='Limit')
                 self.ax6.legend()
 
-
         else:
             self.fig.suptitle(f'Iteration {loop}')
             
@@ -598,7 +600,8 @@ class TwoDTrajectoryOptimization:
 
             self.plot['times'][0].set_xdata(range(len(times)))
             self.plot['times'][0].set_ydata(times)
-            self.plot['time_limit'][0].set_xdata([0, len(times)])
+            if self.params.optimization_time_limit is not None:
+                self.plot['time_limit'][0].set_xdata([0, len(times)-1])
 
             self.ax1.relim()
             self.ax2.relim()

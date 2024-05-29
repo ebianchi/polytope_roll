@@ -21,15 +21,10 @@ HALF_FREQ = False
 MU_GROUND = 0.4
 MU_CONTROL = 1.
 INPUT_LIMIT = 5.
-OPTIMIZATION_TIME_LIMIT = 1000.
-LOOPS = 60
-LOOKAHEAD = 10
+OPTIMIZATION_TIME_LIMIT = 2000.
+LOOKAHEAD = 20
 SAVE_OUTPUT = True
 
-
-# Plotting.
-file_title = "traj_opt"
-title = "Trajectory Optimization"
 
 # Begin to define the system starting with the contact location and direction.
 CONTACT_LOC = np.array([1, 1])
@@ -55,7 +50,7 @@ sim_system = TwoDSystemForceOnly(sim_system_params, CONTACT_LOC, CONTACT_ANGLE)
 # and y velocity directions.  It will get augmented as S = V.T @ S_base @ V for
 # a state-dependent V to map directly from state to slip.  The order for Q uses
 # the LCS ordering:  vx, vy, vth, x, y, th.
-Q = np.diag([0.1, 0.1, 0.8, 1., 1., 5.])
+Q = np.diag([0.1, 0.1, 0.8, 1., 1., 1.])
 R = np.diag([0.003, 0.003])
 S_base = np.diag([0., 0.])
 
@@ -70,7 +65,7 @@ traj_opt = TwoDTrajectoryOptimization(traj_opt_params)
 pdb.set_trace()
 
 # Perform the trajectory optimization.
-traj_opt.run_trajectory_optimization(x0, x_goal, LOOPS)
+traj_opt.run_trajectory_optimization(x0, x_goal)
 
 # Generate a gif from the iteration plots.
 traj_opt.make_gif_from_temp_images()

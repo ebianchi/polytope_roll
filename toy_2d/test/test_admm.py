@@ -25,7 +25,7 @@ DT_TRAJ_OPT = DT_SIM * T_MULTIPLE
 MU_GROUND = 0.4
 MU_CONTROL = 1.
 LOOPS = 60
-LOOKAHEAD = 20
+LOOKAHEAD = 10
 INPUT_LIMIT = 5.
 USE_BIG_M = False
 USE_NON_CONVEX = not USE_BIG_M
@@ -57,8 +57,8 @@ sim_system = TwoDSystemForceOnly(sim_system_params, CONTACT_LOC, CONTACT_ANGLE)
 # Build Q, R, and S matrices.  S_base is the amount to penalize slip in the x
 # and y velocity directions.  It will get augmented as S = V.T @ S_base @ V for
 # a state-dependent V to map directly from state to slip.
-# Q = np.diag([0.1, 0.1, 0.8, 1., 1., 1.])
-Q = np.diag([0.1, 0.1, 0.1, 10., 10., 10.])
+Q = np.diag([0.1, 0.1, 0.8, 1., 1., 1.])
+# Q = np.diag([0.1, 0.1, 0.1, 10., 10., 10.])
 # R = np.diag([0.003, 0.003])
 R = np.diag([0.0, 0.0])
 S_base = np.diag([0., 0.])
