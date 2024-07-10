@@ -69,7 +69,20 @@ class admm_lca(object):
             and input
     """
 
-    def __init__(self, traj_opt_object, x_init, x_goal, rho, tol, T):
+    def __init__(
+        self,
+        traj_opt_object,
+        x_init,
+        x_goal,
+        rho,
+        tol,
+        T,
+        final_error_weight,
+        stage_weight,
+        tau_state,
+        tau_control,
+        tau_contact,
+    ):
         assert x_init.ndim == x_goal.ndim == 1, (
             "Expected all to be of " f"dimension 1: {x_init.ndim=}, {x_goal.ndim=}"
         )
@@ -95,6 +108,12 @@ class admm_lca(object):
 
         self.rho = rho
         self.tol = tol
+
+        self.final_error_weight = final_error_weight
+        self.stage_weight = stage_weight
+        self.tau_state = tau_state
+        self.tau_control = tau_control
+        self.tau_contact = tau_contact
 
         # TODO: allow planning states to be subset of true states.  Or not,
         # since this contact rich example requires all states for
@@ -262,28 +281,28 @@ class admm_lca(object):
             obj += goal_err @ self.Q @ goal_err
 
             state_dual_err = self.x[i, :] @ self.Tr - r[i, :] + self.vr[i, :]
-            obj += (self.rho / 2) * state_dual_err @ state_dual_err
+            obj += (self.rho / 2) * state_dual_err @ self.tau_state @ state_dual_err
 
             control_dual_err = self.u[i, :] - a[i, :] + self.vu[i, :]
-            obj += (self.rho / 2) * control_dual_err @ control_dual_err
+            obj += (
+                (self.rho / 2) * control_dual_err @ self.tau_control @ control_dual_err
+            )
 
             comp_dual_err = self.lam[i, :] - gamma[i, :] + self.vgamma[i, :]
-            obj += (self.rho / 2) * comp_dual_err @ comp_dual_err
+            obj += (self.rho / 2) * comp_dual_err @ self.tau_contact @ comp_dual_err
 
             # Add penalty for complementarity variables.
             obj += gamma[i, :] @ self.T @ gamma[i, :]
 
         state_dual_err = self.x[self.N, :] @ self.Tr - r[self.N, :] + self.vr[self.N, :]
-        obj += (self.rho / 2) * state_dual_err @ state_dual_err
+
+        obj += (self.rho / 2) * state_dual_err @ self.tau_state @ state_dual_err
 
         final_err = r[self.N, :] - self.x_goal
-        obj += 1.0 * final_err @ self.Q @ final_err
+        obj += self.final_error_weight * final_err @ self.Q @ final_err
         model.setObjective(obj, GRB.MINIMIZE)
 
         # Set time limit if desired.
-        if self.params.optimization_time_limit is not None:
-            model.Params.TimeLimit = self.params.optimization_time_limit
-
         if self.optimization_time_limit is not None:
             model.Params.TimeLimit = self.optimization_time_limit
 
@@ -388,26 +407,28 @@ class admm_lca(object):
         # convergence, and control cost to encourage efficiency.
         obj = 0
         for i in range(self.N):
-            stage_err = 0.1 * (x[i + 1, :] - x[i, :])
+            stage_err = self.stage_weight * (x[i + 1, :] - x[i, :])
             obj += stage_err @ stage_err
 
             input_cost = u[i, :] @ self.R @ u[i, :]
             obj += input_cost
 
             state_dual_err = x[i, :] @ self.Tr - self.r[i, :] + self.vr[i, :]
-            obj += (self.rho / 2) * state_dual_err @ state_dual_err
+            obj += (self.rho / 2) * state_dual_err @ self.tau_state @ state_dual_err
 
             control_dual_err = u[i, :] - self.a[i, :] + self.vu[i, :]
-            obj += (self.rho / 2) * control_dual_err @ control_dual_err
+            obj += (
+                (self.rho / 2) * control_dual_err @ self.tau_control @ control_dual_err
+            )
 
             comp_dual_err = lam[i, :] - self.gamma[i, :] + self.vgamma[i, :]
-            obj += (self.rho / 2) * comp_dual_err @ comp_dual_err
+            obj += (self.rho / 2) * comp_dual_err @ self.tau_contact @ comp_dual_err
 
             # Add penalty for complementarity variables.
             obj += lam[i, :] @ self.T @ lam[i, :]
 
         state_dual_err = x[self.N, :] @ self.Tr - self.r[self.N, :] + self.vr[self.N, :]
-        obj += (self.rho / 2) * state_dual_err @ state_dual_err
+        obj += (self.rho / 2) * state_dual_err @ self.tau_state @ state_dual_err
 
         model.setObjective(obj, GRB.MINIMIZE)
 
@@ -504,8 +525,8 @@ class admm_lca(object):
             self.ax6.set_ylabel("Seconds")
             self.ax6.set_title("ADMM Iteration times")
             self.ax6.set_yscale("log")
-            if self.params.optimization_time_limit is not None:
-                tlim = self.params.optimization_time_limit
+            if self.optimization_time_limit is not None:
+                tlim = self.optimization_time_limit
                 self.plot["time_limit"] = self.ax6.plot(
                     [0, 1], [tlim, tlim], "r--", label="Limit"
                 )
@@ -534,7 +555,7 @@ class admm_lca(object):
 
             self.plot["times"][0].set_xdata(range(len(self.loop_times)))
             self.plot["times"][0].set_ydata(self.loop_times)
-            if self.params.optimization_time_limit is not None:
+            if self.optimization_time_limit is not None:
                 self.plot["time_limit"][0].set_xdata([0, len(self.loop_times)])
 
             self.ax1.relim()
