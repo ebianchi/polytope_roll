@@ -4,7 +4,6 @@ Aydinoglu et al., 2021.
 """
 
 import numpy as np
-import pdb
 
 from toy_2d.src.two_dim_system import TwoDimensionalSystem
 
@@ -66,6 +65,7 @@ class TwoDSystemLCSApproximation:
                                 will help us compare these "real" dynamics with
                                 linearization approximations later.
     """
+
     system: TwoDimensionalSystem
 
     def __init__(self, system: TwoDimensionalSystem):
@@ -79,11 +79,11 @@ class TwoDSystemLCSApproximation:
         # Initialize histories to be empty.
         self.state_history = np.zeros((0, 6))
         self.full_control_history = np.zeros((0, 4))
-        self.lambda_history = np.zeros((0, p*(k+2)))
-        self.output_history = np.zeros((0, p*(k+2)))
+        self.lambda_history = np.zeros((0, p * (k + 2)))
+        self.output_history = np.zeros((0, p * (k + 2)))
 
         # Initialize the linearization point to be empty.
-        self.linearization_point = {'q': None, 'v': None, 'controls': None}
+        self.linearization_point = {"q": None, "v": None, "controls": None}
 
     def set_linearization_point(self, q, v, controls):
         """Set the linear approximation's point of linearization.  Note that
@@ -98,18 +98,18 @@ class TwoDSystemLCSApproximation:
         # representation.  Just make sure we didn't compress a (1,) array to ().
         if controls.shape == ():
             controls = controls.reshape(1)
-        
+
         # Store the linearization point.
-        self.linearization_point['q'] = q
-        self.linearization_point['v'] = v
-        self.linearization_point['controls'] = controls
+        self.linearization_point["q"] = q
+        self.linearization_point["v"] = v
+        self.linearization_point["controls"] = controls
 
     def _get_f_1(self, x, u):
         """From the nonlinear notation, evaluate the value of f_1 (of shape
         (6, 1)) at the provided x and u. Note that the x is expected to be in
         the LCS order [vx, vy, vth, x, y, th] and the control input is expected
         to be in generalized coordinates [fx, fy, tau]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
@@ -121,20 +121,26 @@ class TwoDSystemLCSApproximation:
         # Need the mass matrix and continuous forces.
         M = polytope.get_M_matrix(state_sys)
         M_inv = np.linalg.inv(M)
-        k = polytope.get_k_vector(state_sys).reshape(3,)
+        k = polytope.get_k_vector(state_sys).reshape(
+            3,
+        )
 
         # Build the expression.
-        mat_1 = np.vstack((np.hstack((np.eye(n), np.zeros((n,n)))),
-                           np.hstack((dt*np.eye(n), np.eye(n)))))
-        mat_2 = np.vstack((np.eye(n), dt*np.eye(n)))
+        mat_1 = np.vstack(
+            (
+                np.hstack((np.eye(n), np.zeros((n, n)))),
+                np.hstack((dt * np.eye(n), np.eye(n))),
+            )
+        )
+        mat_2 = np.vstack((np.eye(n), dt * np.eye(n)))
 
-        return mat_1 @ x + dt * mat_2 @ M_inv @ (k+u)
+        return mat_1 @ x + dt * mat_2 @ M_inv @ (k + u)
 
     def _get_f_2(self, x):
         """From the nonlinear notation, evaluate the value of f_2 (of shape
         (6, p*(k+2))) at the provided. Note that the x is expected to be in the
         LCS order [vx, vy, vth, x, y, th]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
@@ -152,8 +158,8 @@ class TwoDSystemLCSApproximation:
         N = polytope.get_N_matrix(state_sys)
 
         # Build the expression.
-        mat_1 = np.vstack((np.eye(n), dt*np.eye(n)))
-        mat_2 = np.hstack((D, N, np.zeros((n,p))))
+        mat_1 = np.vstack((np.eye(n), dt * np.eye(n)))
+        mat_2 = np.hstack((D, N, np.zeros((n, p))))
 
         return mat_1 @ M_inv @ mat_2
 
@@ -162,7 +168,7 @@ class TwoDSystemLCSApproximation:
         (p*(k+2), 1)) at the provided x and u.  Note that the x is expected to
         be in the LCS order [vx, vy, vth, x, y, th] and the control input is
         expected to be in generalized coordinates [fx, fy, tau]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
@@ -181,31 +187,40 @@ class TwoDSystemLCSApproximation:
         M_inv = np.linalg.inv(M)
         D = polytope.get_D_matrix(state_sys)
         N = polytope.get_N_matrix(state_sys)
-        k = polytope.get_k_vector(state_sys).reshape(3,)
+        k = polytope.get_k_vector(state_sys).reshape(
+            3,
+        )
 
         # Build the expression.
-        P_5 = np.hstack((np.zeros((p,n+1)), np.ones((p,1)), np.zeros((p,1))))
-        P_6 = np.hstack((np.zeros((p,n+2)), np.ones((p,1))))
+        P_5 = np.hstack(
+            (np.zeros((p, n + 1)), np.ones((p, 1)), np.zeros((p, 1)))
+        )
+        P_6 = np.hstack((np.zeros((p, n + 2)), np.ones((p, 1))))
 
-        mat_1 = np.vstack((D.T, N.T, np.zeros((p,n))))
-        mat_2 = np.hstack((np.eye(n), np.zeros((n,n))))
-        mat_3 = np.vstack((np.zeros((p*k_friction,2*n)), P_5,
-                           np.zeros((p,2*n))))
-        mat_4 = np.vstack((np.zeros((p*k_friction, p)), np.eye(p),
-                           np.zeros((p,p))))
+        mat_1 = np.vstack((D.T, N.T, np.zeros((p, n))))
+        mat_2 = np.hstack((np.eye(n), np.zeros((n, n))))
+        mat_3 = np.vstack(
+            (np.zeros((p * k_friction, 2 * n)), P_5, np.zeros((p, 2 * n)))
+        )
+        mat_4 = np.vstack(
+            (np.zeros((p * k_friction, p)), np.eye(p), np.zeros((p, p)))
+        )
 
         diag_r = np.diag(radii)
 
         sin_vec = np.sin(P_6 @ x + angles)
-        
-        return mat_1 @ (mat_2@x + dt*M_inv@(k+u)) + (1/dt) * mat_3@x + \
-               (1/dt) * mat_4@diag_r@sin_vec
+
+        return (
+            mat_1 @ (mat_2 @ x + dt * M_inv @ (k + u))
+            + (1 / dt) * mat_3 @ x
+            + (1 / dt) * mat_4 @ diag_r @ sin_vec
+        )
 
     def _get_f_4(self, x):
         """From the nonlinear notation, evaluate the value of f_4 (of shape
         (p*(k+2), p*(k+2))) at the provided x.  Note that the x is expected to
         be in the LCS order [vx, vy, vth, x, y, th]."""
-        
+
         # Get some necessary values from inside the system.
         polytope = self.system.params.polytope
         p = polytope.n_contacts
@@ -220,11 +235,13 @@ class TwoDSystemLCSApproximation:
         N = polytope.get_N_matrix(state_sys)
         E = polytope.get_E_matrix(state_sys)
         Mu = polytope.get_mu_matrix(state_sys)
-        
+
         # Build the expression.
         mat_top = np.hstack((D.T @ M_inv @ D, D.T @ M_inv @ N, E))
-        mat_mid = np.hstack((N.T @ M_inv @ D, N.T @ M_inv @ N, np.zeros((p,p))))
-        mat_bot = np.hstack((-E.T, Mu, np.zeros((p,p))))
+        mat_mid = np.hstack(
+            (N.T @ M_inv @ D, N.T @ M_inv @ N, np.zeros((p, p)))
+        )
+        mat_bot = np.hstack((-E.T, Mu, np.zeros((p, p))))
 
         lcp_mat = np.vstack((mat_top, mat_mid, mat_bot))
 
@@ -235,22 +252,26 @@ class TwoDSystemLCSApproximation:
         with respect to the state at the provided state and control input,
         yielding a jacobian of shape (6,6).  Again, the state is expected to be
         in the LCS order [vx, vy, vth, x, y, th]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
         n = polytope.n_config
 
         # Build the expression.
-        return np.vstack((np.hstack((np.eye(n), np.zeros((n,n)))),
-                          np.hstack((dt*np.eye(n), np.eye(n)))))
+        return np.vstack(
+            (
+                np.hstack((np.eye(n), np.zeros((n, n)))),
+                np.hstack((dt * np.eye(n), np.eye(n))),
+            )
+        )
 
     def _get_df1_du(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f1
         with respect to control input at the provided state and control input,
         yielding a jacobian of shape (6,3).  Again, the state is expected to be
         in the LCS order [vx, vy, vth, x, y, th]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
@@ -262,9 +283,9 @@ class TwoDSystemLCSApproximation:
         # Need the mass matrix.
         M = polytope.get_M_matrix(state_sys)
         M_inv = np.linalg.inv(M)
-        
+
         # Build the expression.
-        mat_1 = np.vstack((np.eye(n), dt*np.eye(n)))
+        mat_1 = np.vstack((np.eye(n), dt * np.eye(n)))
 
         return dt * mat_1 @ M_inv
 
@@ -273,7 +294,7 @@ class TwoDSystemLCSApproximation:
         with respect to the state at the provided state and control input,
         yielding a jacobian of shape (p*(k+2),6).  Again, the state is expected
         to be in the LCS order [vx, vy, vth, x, y, th]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
@@ -292,30 +313,37 @@ class TwoDSystemLCSApproximation:
         N = polytope.get_N_matrix(state_sys)
 
         # Build the expression.
-        P_5 = np.hstack((np.zeros((p,n+1)), np.ones((p,1)), np.zeros((p,1))))
-        P_6 = np.hstack((np.zeros((p,n+2)), np.ones((p,1))))
+        P_5 = np.hstack(
+            (np.zeros((p, n + 1)), np.ones((p, 1)), np.zeros((p, 1)))
+        )
+        P_6 = np.hstack((np.zeros((p, n + 2)), np.ones((p, 1))))
 
-        mat_1 = np.vstack((D.T, N.T, np.zeros((p,n))))
-        mat_2 = np.hstack((np.eye(n), np.zeros((n,n))))
-        mat_3 = np.vstack((np.zeros((p*k_friction,2*n)), P_5,
-                           np.zeros((p,2*n))))
-        mat_4 = np.vstack((np.zeros((p*k_friction, p)), np.eye(p),
-                           np.zeros((p,p))))
+        mat_1 = np.vstack((D.T, N.T, np.zeros((p, n))))
+        mat_2 = np.hstack((np.eye(n), np.zeros((n, n))))
+        mat_3 = np.vstack(
+            (np.zeros((p * k_friction, 2 * n)), P_5, np.zeros((p, 2 * n)))
+        )
+        mat_4 = np.vstack(
+            (np.zeros((p * k_friction, p)), np.eye(p), np.zeros((p, p)))
+        )
 
         diag_r = np.diag(radii)
 
         cos_vec = np.cos(P_6 @ x + angles)
         diag_cos = np.diag(cos_vec)
 
-        return mat_1 @ mat_2 + (1/dt) * mat_3 + \
-               (1/dt) * mat_4 @ diag_r @ diag_cos @ P_6
+        return (
+            mat_1 @ mat_2
+            + (1 / dt) * mat_3
+            + (1 / dt) * mat_4 @ diag_r @ diag_cos @ P_6
+        )
 
     def _get_df3_du(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f3
         with respect to control input at the provided state and control input,
         yielding a jacobian of shape (p*(k+2),3).  Again, the state is expected
         to be in the LCS order [vx, vy, vth, x, y, th]."""
-        
+
         # Get some necessary values from inside the system.
         dt = self.system.params.dt
         polytope = self.system.params.polytope
@@ -332,7 +360,7 @@ class TwoDSystemLCSApproximation:
         N = polytope.get_N_matrix(state_sys)
 
         # Build the expression.
-        mat_1 = np.vstack((D.T, N.T, np.zeros((p,n))))
+        mat_1 = np.vstack((D.T, N.T, np.zeros((p, n))))
 
         return dt * mat_1 @ M_inv
 
@@ -364,7 +392,7 @@ class TwoDSystemLCSApproximation:
 
         # Check that the linearization point has been set (assume 'q' key is
         # filled only if all of the other relevant keys are also filled).
-        assert self.linearization_point['q'] is not None
+        assert self.linearization_point["q"] is not None
 
         # Get and return all of the matrices and vectors.
         A = self.get_A_matrix()
@@ -393,9 +421,9 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         # Convert the controls to generalized coordinates using the P map.
         P = self.get_P_matrix()
@@ -411,9 +439,9 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         # Convert the controls to generalized coordinates using the P map.
         P = self.get_P_matrix()
@@ -429,7 +457,7 @@ class TwoDSystemLCSApproximation:
 
         # This requires calling the self._get_f_2(x) function at the state
         # stored in the linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
         return self._get_f_2(x)
 
@@ -440,9 +468,9 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         # Convert the controls to generalized coordinates using the P map.
         P = self.get_P_matrix()
@@ -462,9 +490,9 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         # Convert the controls to generalized coordinates using the P map.
         P = self.get_P_matrix()
@@ -480,9 +508,9 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         # Convert the controls to generalized coordinates using the P map.
         P = self.get_P_matrix()
@@ -498,7 +526,7 @@ class TwoDSystemLCSApproximation:
 
         # This requires calling the self._get_f_4(x) function at the state
         # stored in the linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
         return self._get_f_4(x)
 
@@ -509,9 +537,9 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         # Convert the controls to generalized coordinates using the P map.
         P = self.get_P_matrix()
@@ -532,13 +560,14 @@ class TwoDSystemLCSApproximation:
 
         # This requires using the state and control input stored in the
         # linearization.
-        v, q = self.linearization_point['v'], self.linearization_point['q']
+        v, q = self.linearization_point["v"], self.linearization_point["q"]
         x = np.hstack((v, q))
-        controls = self.linearization_point['controls']
+        controls = self.linearization_point["controls"]
 
         state_sys = self._convert_lcs_state_to_system_state(x)
-        return self.system.get_map_from_controls_to_gen_coordinates(state_sys,
-                                                                    controls)
+        return self.system.get_map_from_controls_to_gen_coordinates(
+            state_sys, controls
+        )
 
     def __check_consistent_histories(self):
         """Check that the history lengths are compatible."""
@@ -563,13 +592,13 @@ class TwoDSystemLCSApproximation:
         # system's polytope parameters.
         p = self.system.params.polytope.n_contacts
         k = self.system.params.polytope.n_friction
-        
+
         # Clear out the histories, setting the first state_history entry to the
         # provided state.
         self.state_history = state.reshape(1, 6)
         self.full_control_history = np.zeros((0, 4))
-        self.lambda_history = np.zeros((0, p*(k+2)))
-        self.output_history = np.zeros((0, p*(k+2)))
+        self.lambda_history = np.zeros((0, p * (k + 2)))
+        self.output_history = np.zeros((0, p * (k + 2)))
 
     def step_lcs_dynamics(self, controls, lamda_k):
         """Given new control inputs and contact forces, step the system forward
@@ -589,8 +618,9 @@ class TwoDSystemLCSApproximation:
 
         # Set the state and control histories.
         self.state_history = np.vstack((self.state_history, next_state))
-        self.full_control_history = np.vstack((self.full_control_history,
-                                               full_control))
+        self.full_control_history = np.vstack(
+            (self.full_control_history, full_control)
+        )
         self.lambda_history = np.vstack((self.lambda_history, lamda_k))
         self.output_history = np.vstack((self.output_history, yk))
 
@@ -616,8 +646,7 @@ class TwoDSystemLCSApproximation:
         u = P @ controls
 
         # Evaluate the expressions for x_{k+1} and y_k.
-        x_k1 = A@x + B@u + C@lambda_k + d
-        y_k = G@x + H@u + J@lambda_k + l
+        x_k1 = A @ x + B @ u + C @ lambda_k + d
+        y_k = G @ x + H @ u + J @ lambda_k + l
 
         return x_k1, y_k
-

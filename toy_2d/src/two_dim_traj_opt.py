@@ -35,7 +35,6 @@ from copy import deepcopy
 
 import numpy as np
 import scipy.sparse as sp
-import pdb
 import timeit
 
 import gurobipy as gp
@@ -50,10 +49,8 @@ from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
 
-
 M1 = 1e3
 M2 = 1e3
-
 
 
 @dataclass
@@ -75,7 +72,7 @@ class TwoDTrajectoryOptimizationParams:
     half_freq: bool = False
     use_big_M: bool = False
     lookahead: int = 4
-    input_limit: float = 5.
+    input_limit: float = 5.0
 
 
 class TwoDTrajectoryOptimization:
@@ -114,6 +111,7 @@ class TwoDTrajectoryOptimization:
                         objects, representing +/-x).
         n_controls:     The number of control inputs of the underlying system.
     """
+
     params: TwoDTrajectoryOptimizationParams
 
     def __init__(self, params: TwoDTrajectoryOptimizationParams):
@@ -158,7 +156,8 @@ class TwoDTrajectoryOptimization:
         # Set the goal and initial states of the system.
         self.x_goal = x_goal
         self.params.sim_system.set_initial_state(
-            self.lcs._convert_lcs_state_to_system_state(x_init))
+            self.lcs._convert_lcs_state_to_system_state(x_init)
+        )
 
         # Set the running state to the current state.
         x_curr = x_init
@@ -188,9 +187,13 @@ class TwoDTrajectoryOptimization:
 
         # Store the statistics and results of the trajectory optimization in the
         # form of a report.
-        report = TrajectoryOptimizationReport(costs=costs, times=times,
-            inputs=inputs, states = self.params.sim_system.state_history,
-            controls = self.params.sim_system.control_history)
+        report = TrajectoryOptimizationReport(
+            costs=costs,
+            times=times,
+            inputs=inputs,
+            states=self.params.sim_system.state_history,
+            controls=self.params.sim_system.control_history,
+        )
 
         self.report = report
 
@@ -209,9 +212,11 @@ class TwoDTrajectoryOptimization:
         # Clip the control input to enforce it is within feasible bounds (slight
         # infeasibility is possible due to numerics).
         control_input = us[0]
-        control_input = np.clip(control_input,
-                                [0, -mu_control*max(0, control_input[0])],
-                                [np.inf, mu_control*max(0, control_input[0])])
+        control_input = np.clip(
+            control_input,
+            [0, -mu_control * max(0, control_input[0])],
+            [np.inf, mu_control * max(0, control_input[0])],
+        )
         for _ in range(t_multiple):
             self.params.sim_system.step_dynamics(control_input)
 
@@ -221,9 +226,11 @@ class TwoDTrajectoryOptimization:
             inputs = np.vstack((inputs, control_input))
 
             control_input2 = us[1]
-            control_input2 = np.clip(control_input2,
-                                [0, -mu_control*max(0, control_input2[0])],
-                                [np.inf, mu_control*max(0, control_input2[0])])
+            control_input2 = np.clip(
+                control_input2,
+                [0, -mu_control * max(0, control_input2[0])],
+                [np.inf, mu_control * max(0, control_input2[0])],
+            )
             for _ in range(t_multiple):
                 self.params.sim_system.step_dynamics(control_input2)
 
@@ -257,20 +264,25 @@ class TwoDTrajectoryOptimization:
         # To build the V matrix, get the angle between the ground and the
         # pivoting vertex as well as the index of that vertex.
         theta_v, pivot_index = polytope.get_theta_v_and_pivot_index_from_theta(
-                                                                        q[2])
+            q[2]
+        )
 
         # The lever angle of the center of mass is the ground angle plus the
         # angle between the convex hull face and the line between the pivot and
         # the center of mass.
-        lever_angle = theta_v + polytope.gammas[(pivot_index-1) % p]
+        lever_angle = theta_v + polytope.gammas[(pivot_index - 1) % p]
 
         # The lever arm is the distance between the pivot and center of mass.
         radii, _ = polytope.get_vertex_radii_angles()
         lever_arm = radii[pivot_index]
 
         # Build the matrix V such that V @ x yields the "slip vector".
-        V = np.array([[1., 0., lever_arm*np.sin(lever_angle), 0., 0., 0.],
-                      [0., 1., -lever_arm*np.cos(lever_angle), 0., 0., 0.]])
+        V = np.array(
+            [
+                [1.0, 0.0, lever_arm * np.sin(lever_angle), 0.0, 0.0, 0.0],
+                [0.0, 1.0, -lever_arm * np.cos(lever_angle), 0.0, 0.0, 0.0],
+            ]
+        )
 
         # Get S to penalize the amount of slip, when S is used as the norm of the
         # current state vector.
@@ -300,21 +312,44 @@ class TwoDTrajectoryOptimization:
         model = gp.Model("traj_opt")
 
         # Mute the model (may want to comment this out for debugging).
-        model.setParam('OutputFlag', 0)
+        model.setParam("OutputFlag", 0)
 
         # Create variables.
-        xs = model.addMVar(shape=(lookahead+1, 2*n), lb=-np.inf, ub=np.inf,
-                            vtype=GRB.CONTINUOUS, name="xs")
-        x_errs = model.addMVar(shape=(lookahead, 2*n), lb=-np.inf, ub=np.inf,
-                                vtype=GRB.CONTINUOUS, name="x_errs")
-        us = model.addMVar(shape=(lookahead, nu), lb=-input_limit,
-                           ub=input_limit, vtype=GRB.CONTINUOUS, name="us")
-        lambdas = model.addMVar(shape=(lookahead, p*(k_friction+2)),
-                                lb=-np.inf, ub=np.inf,
-                                vtype=GRB.CONTINUOUS, name="lambdas")
-        ys = model.addMVar(shape=(lookahead, p*(k_friction+2)),
-                           lb=-np.inf, ub=np.inf,
-                           vtype=GRB.CONTINUOUS, name="ys")
+        xs = model.addMVar(
+            shape=(lookahead + 1, 2 * n),
+            lb=-np.inf,
+            ub=np.inf,
+            vtype=GRB.CONTINUOUS,
+            name="xs",
+        )
+        x_errs = model.addMVar(
+            shape=(lookahead, 2 * n),
+            lb=-np.inf,
+            ub=np.inf,
+            vtype=GRB.CONTINUOUS,
+            name="x_errs",
+        )
+        us = model.addMVar(
+            shape=(lookahead, nu),
+            lb=-input_limit,
+            ub=input_limit,
+            vtype=GRB.CONTINUOUS,
+            name="us",
+        )
+        lambdas = model.addMVar(
+            shape=(lookahead, p * (k_friction + 2)),
+            lb=-np.inf,
+            ub=np.inf,
+            vtype=GRB.CONTINUOUS,
+            name="lambdas",
+        )
+        ys = model.addMVar(
+            shape=(lookahead, p * (k_friction + 2)),
+            lb=-np.inf,
+            ub=np.inf,
+            vtype=GRB.CONTINUOUS,
+            name="ys",
+        )
 
         # Set objective:  penalize distance to goal, control input, and slip
         # measurement.
@@ -327,61 +362,96 @@ class TwoDTrajectoryOptimization:
 
         # Build constraints.
         # -> Dynamics, initial condition, error coordinates, output, etc.
-        model.addConstr(xs[0,:] == x_current, name="initial_condition")
+        model.addConstr(xs[0, :] == x_current, name="initial_condition")
         model.addConstrs(
-            (xs[i+1,:] == A@xs[i,:] + B@P@us[i,:] + C@lambdas[i,:] + d \
-             for i in range(lookahead)), name="dynamics")
+            (
+                xs[i + 1, :]
+                == A @ xs[i, :] + B @ P @ us[i, :] + C @ lambdas[i, :] + d
+                for i in range(lookahead)
+            ),
+            name="dynamics",
+        )
         model.addConstrs(
-            (x_errs[i,:] == xs[i+1,:] - self.x_goal \
-             for i in range(lookahead)), name="error_coordinates")
+            (
+                x_errs[i, :] == xs[i + 1, :] - self.x_goal
+                for i in range(lookahead)
+            ),
+            name="error_coordinates",
+        )
         model.addConstrs(
-            (ys[i,:] >= 0 for i in range(lookahead)), name="comp_1")
+            (ys[i, :] >= 0 for i in range(lookahead)), name="comp_1"
+        )
         model.addConstrs(
-            (lambdas[i,:] >= 0 for i in range(lookahead)), name="comp_2")
+            (lambdas[i, :] >= 0 for i in range(lookahead)), name="comp_2"
+        )
         model.addConstrs(
-            (ys[i,:] == G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
-             for i in range(lookahead)), name="output")
+            (
+                ys[i, :]
+                == G @ xs[i, :] + H @ P @ us[i, :] + J @ lambdas[i, :] + l
+                for i in range(lookahead)
+            ),
+            name="output",
+        )
         # -> Note:  the below 3 friction cone constraints expect the input
         # forces to be in the form [f_normal, f_tangent].
         model.addConstrs(
-            (us[i,0] >= 0 for i in range(lookahead)), name="friction_cone_1")
+            (us[i, 0] >= 0 for i in range(lookahead)), name="friction_cone_1"
+        )
         model.addConstrs(
-            (-mu_control*us[i,0] <= us[i,1] \
-             for i in range(lookahead)), name="friction_cone_2a")
+            (-mu_control * us[i, 0] <= us[i, 1] for i in range(lookahead)),
+            name="friction_cone_2a",
+        )
         model.addConstrs(
-            (us[i,1] <= mu_control*us[i,0] \
-             for i in range(lookahead)), name="friction_cone_2b")
+            (us[i, 1] <= mu_control * us[i, 0] for i in range(lookahead)),
+            name="friction_cone_2b",
+        )
 
         # -> Option 1:  Big M method (convex).
         if self.params.use_big_M:
-            ss = model.addMVar(shape=(lookahead, p*(k_friction+2)),
-                               vtype=GRB.BINARY, name="ss")
+            ss = model.addMVar(
+                shape=(lookahead, p * (k_friction + 2)),
+                vtype=GRB.BINARY,
+                name="ss",
+            )
             model.addConstrs(
-                (M1*ss[i,:] >= G@xs[i,:] + H@P@us[i,:] + J@lambdas[i,:] + l \
-                 for i in range(lookahead)), name="big_m_1")
+                (
+                    M1 * ss[i, :]
+                    >= G @ xs[i, :] + H @ P @ us[i, :] + J @ lambdas[i, :] + l
+                    for i in range(lookahead)
+                ),
+                name="big_m_1",
+            )
             model.addConstrs(
-                (M2*(1-ss[i,:]) >= lambdas[i,:] for i in range(lookahead)),
-                name="big_m_2")
+                (
+                    M2 * (1 - ss[i, :]) >= lambdas[i, :]
+                    for i in range(lookahead)
+                ),
+                name="big_m_2",
+            )
 
         # -> Option 2:  Complementarity constraint (non-convex).
         else:
             model.params.NonConvex = 2
             model.addConstrs(
-                (lambdas[i,:] @ ys[i,:] == 0 for i in range(lookahead)),
-                name="complementarity")
+                (lambdas[i, :] @ ys[i, :] == 0 for i in range(lookahead)),
+                name="complementarity",
+            )
 
         # Solve the optimization problem, returning the control input and cost.
         try:
             model.optimize()
-            print('Obj: %g' % model.ObjVal)
+            print("Obj: %g" % model.ObjVal)
             return us.X, model.ObjVal
 
-        except gp.GurobiError as e:  print(f'Error code {e.errno}: {e}')
-        except AttributeError:  print('Encountered an attribute error')
-        pdb.set_trace()
+        except gp.GurobiError as e:
+            print(f"Error code {e.errno}: {e}")
+        except AttributeError:
+            print("Encountered an attribute error")
+        breakpoint()
 
-    def generate_visuals_from_latest_report(self, file_title=None, title=None,
-                                            save=False):
+    def generate_visuals_from_latest_report(
+        self, file_title=None, title=None, save=False
+    ):
         """Given the results of a previously run receding horizon model
         predictive control experiment, generate helpful visuals of the results,
         saving them if desired."""
@@ -400,11 +470,23 @@ class TwoDTrajectoryOptimization:
         dt_sim = self.params.sim_system.params.dt
 
         # Plot the results in the trajectory optimization report.
-        vis_utils.traj_plot(states, controls, file_title, save=save,
-                            costs=costs, times=times, title=title)
+        vis_utils.traj_plot(
+            states,
+            controls,
+            file_title,
+            save=save,
+            costs=costs,
+            times=times,
+            title=title,
+        )
 
         # Generate a gif of the simulated rollout.
-        vis_utils.animation_gif_polytope(polytope, states, file_title, dt_sim,
-                                         controls=controls, save=save,
-                                         title=title)
-
+        vis_utils.animation_gif_polytope(
+            polytope,
+            states,
+            file_title,
+            dt_sim,
+            controls=controls,
+            save=save,
+            title=title,
+        )

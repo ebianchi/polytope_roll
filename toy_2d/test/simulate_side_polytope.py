@@ -6,14 +6,16 @@ of all 3 of these quantities:  thus the state vector is 6-dimensional.
 """
 
 import numpy as np
-import pdb
-import matplotlib.pyplot as plt
 
 from toy_2d.src import vis_utils
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
-                                        TwoDimensionalPolytope
-from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
-                                      TwoDSystemForceSide
+from toy_2d.src.two_dim_polytope import (
+    TwoDimensionalPolytopeParams,
+    TwoDimensionalPolytope,
+)
+from toy_2d.src.two_dim_system import (
+    TwoDimensionalSystemParams,
+    TwoDSystemForceSide,
+)
 
 
 # Fixed parameters
@@ -32,33 +34,31 @@ MOM_INERTIA = 0.01
 MU_GROUND = 0.4
 
 # Control properties
-MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
-                    # this to help define a set of feasible control forces.
+MU_CONTROL = 0.5  # Currently, this isn't being used.  The ambition is for
+# this to help define a set of feasible control forces.
 
 # Simulation parameters.
-DT = 0.002          # If a generated trajectory looks messed up, it could be
-                    # fixed by making this timestep smaller.
+DT = 0.002  # If a generated trajectory looks messed up, it could be
+# fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-x0 = np.array([0., 0., 1., 0., 0., 0.])
+x0 = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 states = x0.reshape(1, 6)
 
 
 # Create a polytope.
 poly_params = TwoDimensionalPolytopeParams(
-    mass = MASS,
-    moment_inertia = MOM_INERTIA,
-    mu_ground = MU_GROUND,
-    vertex_locations = SQUARE_NOTCH_CORNERS
+    mass=MASS,
+    moment_inertia=MOM_INERTIA,
+    mu_ground=MU_GROUND,
+    vertex_locations=SQUARE_NOTCH_CORNERS,
 )
 polytope = TwoDimensionalPolytope(poly_params)
 
 # Create a system from the polytope, a simulation timestep, and a control
 # contact's friction parameter.
 system_params = TwoDimensionalSystemParams(
-    dt = DT,
-    polytope = polytope,
-    mu_control = MU_CONTROL
+    dt=DT, polytope=polytope, mu_control=MU_CONTROL
 )
 system = TwoDSystemForceSide(system_params, CONTACT_SIDE)
 
@@ -68,8 +68,8 @@ system.set_initial_state(x0)
 for i in range(1250):
     # Apply a force -- give a normal and tangential component as well as an
     # interpolation coefficient between 0 and 1.
-    fl = float((1250-i)/1250)
-    control = np.array([5., 4.12, fl])
+    fl = float((1250 - i) / 1250)
+    control = np.array([5.0, 4.12, fl])
 
     system.step_dynamics(control)
 
@@ -78,19 +78,20 @@ states = system.state_history
 controls = system.control_history
 control_forces, control_locs = controls[:, :2], controls[:, 2:]
 
-pdb.set_trace()
+breakpoint()
 
 # Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, 'simulated_side_notch_traj', save=False)
+vis_utils.traj_plot(states, controls, "simulated_side_notch_traj", save=False)
 
 # Generate a gif of the simulated rollout.
-vis_utils.animation_gif_polytope(polytope, states, 'simulated_side_notch_traj',
-    DT, controls=(control_forces, control_locs), save=False, force_scale=10.)
+vis_utils.animation_gif_polytope(
+    polytope,
+    states,
+    "simulated_side_notch_traj",
+    DT,
+    controls=(control_forces, control_locs),
+    save=False,
+    force_scale=10.0,
+)
 
-pdb.set_trace()
-
-
-
-
-
-
+breakpoint()

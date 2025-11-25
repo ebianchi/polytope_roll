@@ -6,14 +6,16 @@ of all 3 of these quantities:  thus the state vector is 6-dimensional.
 """
 
 import numpy as np
-import pdb
-import matplotlib.pyplot as plt
 
 from toy_2d.src import vis_utils
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams, \
-                                        TwoDimensionalPolytope
-from toy_2d.src.two_dim_system import TwoDimensionalSystemParams, \
-                                      TwoDimensionalSystem
+from toy_2d.src.two_dim_polytope import (
+    TwoDimensionalPolytopeParams,
+    TwoDimensionalPolytope,
+)
+from toy_2d.src.two_dim_system import (
+    TwoDimensionalSystemParams,
+    TwoDimensionalSystem,
+)
 
 
 # Fixed parameters
@@ -28,33 +30,31 @@ MOM_INERTIA = 0.01
 MU_GROUND = 0.3
 
 # Control properties
-MU_CONTROL = 0.5    # Currently, this isn't being used.  The ambition is for
-                    # this to help define a set of feasible control forces.
+MU_CONTROL = 0.5  # Currently, this isn't being used.  The ambition is for
+# this to help define a set of feasible control forces.
 
 # Simulation parameters.
-DT = 0.002          # If a generated trajectory looks messed up, it could be
-                    # fixed by making this timestep smaller.
+DT = 0.002  # If a generated trajectory looks messed up, it could be
+# fixed by making this timestep smaller.
 
 # Initial conditions, in order of x, dx, y, dy, theta, dtheta
-x0 = np.array([0, 0, 1.5, 0, -1/6 * np.pi, 0])
+x0 = np.array([0, 0, 1.5, 0, -1 / 6 * np.pi, 0])
 states = x0.reshape(1, 6)
 
 
 # Create a polytope.
 poly_params = TwoDimensionalPolytopeParams(
-    mass = MASS,
-    moment_inertia = MOM_INERTIA,
-    mu_ground = MU_GROUND,
-    vertex_locations = SQUARE_CORNERS
+    mass=MASS,
+    moment_inertia=MOM_INERTIA,
+    mu_ground=MU_GROUND,
+    vertex_locations=SQUARE_CORNERS,
 )
 polytope = TwoDimensionalPolytope(poly_params)
 
 # Create a system from the polytope, a simulation timestep, and a control
 # contact's friction parameter.
 system_params = TwoDimensionalSystemParams(
-    dt = DT,
-    polytope = polytope,
-    mu_control = MU_CONTROL
+    dt=DT, polytope=polytope, mu_control=MU_CONTROL
 )
 system = TwoDimensionalSystem(system_params)
 
@@ -81,17 +81,19 @@ states = system.state_history
 controls = system.control_history
 control_forces, control_locs = controls[:, :2], controls[:, 2:]
 
-pdb.set_trace()
+breakpoint()
 
 # Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, 'simulated_traj', save=True)
+vis_utils.traj_plot(states, controls, "simulated_traj", save=True)
 
 # Generate a gif of the simulated rollout.
-vis_utils.animation_gif_polytope(polytope, states, 'square', DT,
-    controls=(control_forces, control_locs), save=True)
+vis_utils.animation_gif_polytope(
+    polytope,
+    states,
+    "square",
+    DT,
+    controls=(control_forces, control_locs),
+    save=True,
+)
 
-pdb.set_trace()
-
-
-
-
+breakpoint()
