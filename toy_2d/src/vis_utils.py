@@ -1,20 +1,15 @@
 # Visualization utilities
 
 import os
-import time
 import imageio.v2 as imageio
 import numpy as np
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mtick
-from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Polygon
 
 from toy_2d.src import file_utils
-from toy_2d.src.two_dim_polytope import (
-    TwoDimensionalPolytopeParams,
-    TwoDimensionalPolytope,
-)
+from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
+from toy_2d.src.two_dim_spring_network import TwoDimensionalSpringNetwork
 
 
 FORCE_SCALING = 1.0  # Scaling factor for viewing forces.
@@ -74,8 +69,22 @@ def animation_gif_polytope(
     init_corners = polytope.get_vertex_locations_world(
         init_state, for_visualization=True
     )
-    poly = Polygon(init_corners, closed=True)
-    ax.add_patch(poly)
+
+    # Draw the underlying connections.
+    if type(polytope) == TwoDimensionalPolytope:
+        poly = Polygon(init_corners, closed=True)
+        ax.add_patch(poly)
+    elif type(polytope) == TwoDimensionalSpringNetwork:
+        springs = []
+        for i, j in polytope.params.connections:
+            (line,) = ax.plot(
+                [init_corners[i, 0], init_corners[j, 0]],
+                [init_corners[i, 1], init_corners[j, 1]],
+                "k-",
+                linewidth=2,
+            )
+            springs.append(line)
+
     (corner_dots,) = ax.plot(
         init_corners[:, 0], init_corners[:, 1], "ro", markersize=8, linewidth=0
     )
@@ -112,7 +121,13 @@ def animation_gif_polytope(
         )
         corner_dots.set_data((new_corners[:, 0], new_corners[:, 1]))
 
-        poly.set(xy=new_corners)
+        if type(polytope) == TwoDimensionalPolytope:
+            poly.set(xy=new_corners)
+        elif type(polytope) == TwoDimensionalSpringNetwork:
+            for idx, (line) in enumerate(springs):
+                i, j = polytope.params.connections[idx]
+                line.set_xdata([new_corners[i, 0], new_corners[j, 0]])
+                line.set_ydata([new_corners[i, 1], new_corners[j, 1]])
 
         if (controls is not None) and (i + 1 < states.shape[0]):
             # update arrow

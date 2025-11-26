@@ -3,15 +3,16 @@ interacting with gravity, control inputs, and a flat table with which the
 polytope undergoes inelastic frictional contact.
 """
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional
+from dataclasses import dataclass
 
 import numpy as np
-import pdb
-import sympy
 
 from toy_2d.src import solver_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
+from toy_2d.src.two_dim_spring_network import (
+    TwoDimensionalParticle,
+    TwoDimensionalSpringNetwork,
+)
 
 
 @dataclass
@@ -19,6 +20,7 @@ class TwoDimensionalSystemParams:
     dt: float = 0.001
     polytope: TwoDimensionalPolytope = None
     mu_control: float = 0.5
+
 
 class TwoDimensionalSystem:
     """A system capable of simulation consisting of a flat ground and a 2D
@@ -28,7 +30,7 @@ class TwoDimensionalSystem:
         params:             2D system parameters, including a time step, a 2D
                             polytope object, and the friction parameter between
                             a control contact and the polytope.
-        state_history:      (T, 6) numpy array of the state trajectory of the
+        state_history:      (T, n_x) numpy array of the state trajectory of the
                             system.
         control_history:    (T-1, 4) numpy array of the control input history of
                             the system, stored as [fx, fy, locx, locy].  This
@@ -49,6 +51,7 @@ class TwoDimensionalSystem:
                             help us compare these "real" dynamics with
                             linearization approximations later.
     """
+
     params: TwoDimensionalSystemParams
 
     def __init__(self, params: TwoDimensionalSystemParams):
@@ -56,16 +59,17 @@ class TwoDimensionalSystem:
 
         # Get the number of contacts and friction cone directions from the
         # system's polytope parameters.
+        n_x = 2 * self.params.polytope.n_config
         p = self.params.polytope.n_contacts
         k = self.params.polytope.n_friction
 
         # Initialize histories to be empty.
-        self.state_history = np.zeros((0, 6))
+        self.state_history = np.zeros((0, n_x))
         self.control_history = np.zeros((0, 4))
-        self.lambda_history = np.zeros((0, p*(k+2)))
-        self.output_history = np.zeros((0, p*(k+2)))
+        self.lambda_history = np.zeros((0, p * (k + 2)))
+        self.output_history = np.zeros((0, p * (k + 2)))
 
-    def __check_consistent_histories(self):
+    def _check_consistent_histories(self):
         """Check that the history lengths are compatible."""
         state_len = self.state_history.shape[0]
         control_len = self.control_history.shape[0]
@@ -79,42 +83,46 @@ class TwoDimensionalSystem:
             assert state_len - control_len == 1
             assert control_len == lam_len == out_len
 
-    def __step_dynamics_no_ground_contact(self, state, controls):
+    def _step_dynamics_no_ground_contact(self, state, controls):
         """Do a dynamics step assuming no contact forces."""
 
         polytope = self.params.polytope
         dt = self.params.dt
 
-        v0 = np.array([state[1], state[3], state[5]]).reshape(3, 1)
-        q0 = np.array([state[0], state[2], state[4]]).reshape(3, 1)
+        n_q = polytope.n_config
+        q0 = np.array([state[2 * i] for i in range(n_q)]).reshape(n_q, 1)
+        v0 = np.array([state[2 * i + 1] for i in range(n_q)]).reshape(n_q, 1)
 
         # Some of these quantities are more accurate if calculated at a point in
         # the future, so create a mid-state.
-        q_mid_for_M = q0 + dt*v0
-        q_mid_for_k = q0 + dt*v0/2
+        q_mid_for_M = q0 + dt * v0
+        q_mid_for_k = q0 + dt * v0 / 2
 
-        state_for_M = np.array([q_mid_for_M[0], v0[0],
-                                q_mid_for_M[1], v0[1],
-                                q_mid_for_M[2], v0[2]])
-        state_for_k = np.array([q_mid_for_k[0], v0[0],
-                                q_mid_for_k[1], v0[1],
-                                q_mid_for_k[2], v0[2]])
+        # Build the state vectors.
+        state_for_M = np.zeros(2 * n_q)
+        state_for_k = np.zeros(2 * n_q)
+        for i in range(n_q):
+            state_for_M[2 * i] = q_mid_for_M[i, 0]
+            state_for_M[2 * i + 1] = v0[i, 0]
+            state_for_k[2 * i] = q_mid_for_k[i, 0]
+            state_for_k[2 * i + 1] = v0[i, 0]
 
         # Do a forward simulation as if forces were zero (no LCP required).
         M = polytope.get_M_matrix(state_for_M)
         k = polytope.get_k_vector(state_for_k)
         u = self.convert_input_to_generalized_coords(state, controls)
-        u = u.reshape((3, 1))
+        u = u.reshape((n_q, 1))
 
         v_next = v0 + np.linalg.inv(M) @ (k + u) * dt
         q_next = q0 + dt * v_next
 
-        v_next = v_next.reshape((3,))
-        q_next = q_next.reshape((3,))
+        v_next = v_next.reshape((n_q,))
+        q_next = q_next.reshape((n_q,))
+        next_state = np.zeros(2 * n_q)
+        for i in range(n_q):
+            next_state[2 * i] = q_next[i]
+            next_state[2 * i + 1] = v_next[i]
 
-        next_state = np.array([q_next[0], v_next[0], 
-                               q_next[1], v_next[1],
-                               q_next[2], v_next[2]])
         return next_state
 
     def get_simulation_terms(self, state, controls):
@@ -124,28 +132,31 @@ class TwoDimensionalSystem:
         polytope = self.params.polytope
         dt = self.params.dt
 
-        q0 = np.array([state[0], state[2], state[4]]).reshape(3, 1)
-        v0 = np.array([state[1], state[3], state[5]]).reshape(3, 1)
+        n_q = polytope.n_config
+        q0 = np.array([state[2 * i] for i in range(n_q)]).reshape(n_q, 1)
+        v0 = np.array([state[2 * i + 1] for i in range(n_q)]).reshape(n_q, 1)
 
         # Some of these quantities are more accurate if calculated at a point in
         # the future, so create a mid-state.  These midstates are defined for
         # the mass matrix, M, and the continuous force vector, k, in the top
         # Equation 27 of Stewart and Trinkle 1996.
-        q_mid_for_M = q0 + dt*v0
-        q_mid_for_k = q0 + dt*v0/2
+        q_mid_for_M = q0 + dt * v0
+        q_mid_for_k = q0 + dt * v0 / 2
 
-        state_for_M = np.array([q_mid_for_M[0], v0[0],
-                                q_mid_for_M[1], v0[1],
-                                q_mid_for_M[2], v0[2]])
-        state_for_k = np.array([q_mid_for_k[0], v0[0],
-                                q_mid_for_k[1], v0[1],
-                                q_mid_for_k[2], v0[2]])
+        # Build the state vectors.
+        state_for_M = np.zeros(2 * n_q)
+        state_for_k = np.zeros(2 * n_q)
+        for i in range(n_q):
+            state_for_M[2 * i] = q_mid_for_M[i, 0]
+            state_for_M[2 * i + 1] = v0[i, 0]
+            state_for_k[2 * i] = q_mid_for_k[i, 0]
+            state_for_k[2 * i + 1] = v0[i, 0]
 
         M = polytope.get_M_matrix(state_for_M)
         k = polytope.get_k_vector(state_for_k)
 
         u = self.convert_input_to_generalized_coords(state, controls)
-        u = u.reshape((3, 1))
+        u = u.reshape((n_q, 1))
 
         D = polytope.get_D_matrix(state)
         N = polytope.get_N_matrix(state)
@@ -162,15 +173,16 @@ class TwoDimensionalSystem:
 
         # Get the number of contacts and friction cone directions from the
         # system's polytope parameters.
+        n_x = 2 * self.params.polytope.n_config
         p = self.params.polytope.n_contacts
         k = self.params.polytope.n_friction
-        
+
         # Clear out the histories, setting the first state_history entry to the
         # provided state and emptying the other histories.
-        self.state_history = state.reshape(1, 6)
+        self.state_history = state.reshape(1, n_x)
         self.control_history = np.zeros((0, 4))
-        self.lambda_history = np.zeros((0, p*(k+2)))
-        self.output_history = np.zeros((0, p*(k+2)))
+        self.lambda_history = np.zeros((0, p * (k + 2)))
+        self.output_history = np.zeros((0, p * (k + 2)))
 
     def step_dynamics(self, controls):
         """Given new control inputs, step the system forward in time, appending
@@ -178,11 +190,11 @@ class TwoDimensionalSystem:
         history arrays, respectively."""
 
         # Check that the histories are consistent.
-        self.__check_consistent_histories()
+        self._check_consistent_histories()
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state, lam, out = self.__step_dynamics(state, controls)
+        next_state, lam, out = self._step_dynamics(state, controls)
 
         # Get the controls in the full [fx, fy, loc_x, loc_y] format.
         full_controls = self.get_full_controls(state, controls)
@@ -193,7 +205,7 @@ class TwoDimensionalSystem:
         self.lambda_history = np.vstack((self.lambda_history, lam))
         self.output_history = np.vstack((self.output_history, out))
 
-    def __step_dynamics(self, state, controls):
+    def _step_dynamics(self, state, controls):
         """Given the current state and controls (given as (4,) array for
         [force_x, force_y, world_loc_x, world_loc_y]), simulate the system one
         timestep into the future.  This function necessarily determines the
@@ -205,22 +217,24 @@ class TwoDimensionalSystem:
         polytope = self.params.polytope
         dt = self.params.dt
         p, k_friction = polytope.n_contacts, polytope.n_friction
+        n_q = polytope.n_config
 
         # Construct LCP terms.
-        M, D, N, E, Mu, k, u, q0, v0, phi = self.get_simulation_terms(state,
-                                                    controls)
+        M, D, N, E, Mu, k, u, q0, v0, phi = self.get_simulation_terms(
+            state, controls
+        )
         M_i = np.linalg.inv(M)
 
         # Formulating this inelastic frictional contact dynamics as an LCP is
         # given in Stewart and Trinkle 1996 (see Equation 29 for the structure
         # of the lcp_mat and lcp_vec).
         mat_top = np.hstack((D.T @ M_i @ D, D.T @ M_i @ N, E))
-        mat_mid = np.hstack((N.T @ M_i @ D, N.T @ M_i @ N, np.zeros((p,p))))
-        mat_bot = np.hstack((-E.T, Mu, np.zeros((p,p))))
+        mat_mid = np.hstack((N.T @ M_i @ D, N.T @ M_i @ N, np.zeros((p, p))))
+        mat_bot = np.hstack((-E.T, Mu, np.zeros((p, p))))
 
-        vec_top = D.T @ (v0 + dt * M_i @ (k+u))
-        vec_mid = (1./dt) * phi + N.T @ (v0 + dt * M_i @ (k+u))
-        vec_bot = np.zeros((p,1))
+        vec_top = D.T @ (v0 + dt * M_i @ (k + u))
+        vec_mid = (1.0 / dt) * phi + N.T @ (v0 + dt * M_i @ (k + u))
+        vec_bot = np.zeros((p, 1))
 
         lcp_mat = np.vstack((mat_top, mat_mid, mat_bot))
         lcp_vec = np.vstack((vec_top, vec_mid, vec_bot))
@@ -228,22 +242,23 @@ class TwoDimensionalSystem:
         # Get and use the LCP solution.
         lcp_sol = solver_utils.solve_lcp(lcp_mat, lcp_vec)
 
-        Beta = lcp_sol[:p*k_friction].reshape(p*k_friction, 1)
-        Cn = lcp_sol[p*k_friction:p*k_friction + p].reshape(p, 1)
+        Beta = lcp_sol[: p * k_friction].reshape(p * k_friction, 1)
+        Cn = lcp_sol[p * k_friction : p * k_friction + p].reshape(p, 1)
 
-        v_next = v0 + M_i @ (N@Cn + D@Beta + dt * (k + u))
+        v_next = v0 + M_i @ (N @ Cn + D @ Beta + dt * (k + u))
         q_next = q0 + dt * v_next
 
-        v_next = v_next.reshape((3,))
-        q_next = q_next.reshape((3,))
+        v_next = v_next.reshape((n_q,))
+        q_next = q_next.reshape((n_q,))
 
-        next_state = np.array([q_next[0], v_next[0], 
-                               q_next[1], v_next[1],
-                               q_next[2], v_next[2]])
+        next_state = np.zeros(2 * n_q)
+        for i in range(n_q):
+            next_state[2 * i] = q_next[i]
+            next_state[2 * i + 1] = v_next[i]
 
         # Return the next state, lambda, and outputs.
         lam = lcp_sol.squeeze()
-        output = lcp_mat@lam + lcp_vec.squeeze()
+        output = lcp_mat @ lam + lcp_vec.squeeze()
 
         return next_state, lam, output
 
@@ -258,34 +273,59 @@ class TwoDimensionalSystem:
         P = self.get_map_from_controls_to_gen_coordinates(state, controls)
         return P @ controls
 
+    # TODO @bibit:  think about what this should be for particle.
     def get_map_from_controls_to_gen_coordinates(self, state, controls):
         """Return the map P that converts the control inputs into generalized
         coordinates, i.e. u_gen = P @ tilde{u}.  In this case, we assume the
         controls are in the form [fx, fy, loc_x, loc_y], and we linearize about
         the current state and control location."""
-
         controls = controls.squeeze()
         assert controls.shape == (4,)
 
-        # Grab the current state and control location for linearization.
-        x, y = state[0], state[2]
-        u_locx, u_locy = controls[2], controls[3]
+        if type(self.params.polytope) == TwoDimensionalPolytope:
+            # Grab the current state and control location for linearization.
+            x, y = state[0], state[2]
+            u_locx, u_locy = controls[2], controls[3]
 
-        # Build the expressions for force in the x direction, force in the y
-        # direction, and torque about the CoM.
-        lever_x = u_locx - x
-        lever_y = u_locy - y
+            # Build the expressions for force in the x direction, force in the y
+            # direction, and torque about the CoM.
+            lever_x = u_locx - x
+            lever_y = u_locy - y
 
-        return np.array([[1., 0., 0., 0.],
-                         [0., 1., 0., 0.],
-                         [-lever_y, lever_x, 0., 0.]])
+            return np.array(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [-lever_y, lever_x, 0.0, 0.0],
+                ]
+            )
+        elif type(self.params.polytope) == TwoDimensionalParticle:
+            # For a particle, there is no torque contribution.
+            return np.array(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                ]
+            )
+        elif type(self.params.polytope) == TwoDimensionalSpringNetwork:
+            P = np.array(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                ]
+            )
+            return np.tile(P, (self.params.polytope.n_contacts, 1))
+        else:
+            raise NotImplementedError(
+                "Unknown polytope type in system parameters."
+            )
 
     def get_full_controls(self, _state, controls):
         """Given the controls in whatever format, convert it into the format
         [fx, fy, loc_x, loc_y], which is most convenient for visualization
         later.  In this TwoDimensionalSystem, we assume controls is already in
         that format."""
-        
+
         # Return controls itself.
         return controls.reshape(1, 4)
 
@@ -303,12 +343,17 @@ class TwoDSystemMagOnly(TwoDimensionalSystem):
         contact_angle:  Direction (given as an angle) in body-frame of the
                         control contact force.
     """
+
     params: TwoDimensionalSystemParams
     contact_point: np.array
     contact_angle: float
 
-    def __init__(self, params: TwoDimensionalSystemParams,
-                 contact_point: np.array, contact_angle: float):
+    def __init__(
+        self,
+        params: TwoDimensionalSystemParams,
+        contact_point: np.array,
+        contact_angle: float,
+    ):
         # Do some checks that the contact point and contact direction make
         # sense.
         contact_point = contact_point.squeeze()
@@ -337,10 +382,13 @@ class TwoDSystemMagOnly(TwoDimensionalSystem):
         lever_x, lever_y = self.contact_point[0], self.contact_point[1]
 
         # Build the expression.
-        return np.array([[np.cos(world_angle)],
-                         [np.sin(world_angle)],
-                         [lever_x * np.sin(body_angle) - \
-                          lever_y * np.cos(body_angle)]])
+        return np.array(
+            [
+                [np.cos(world_angle)],
+                [np.sin(world_angle)],
+                [lever_x * np.sin(body_angle) - lever_y * np.cos(body_angle)],
+            ]
+        )
 
     def get_full_controls(self, state, controls):
         """Given controls as a (1,) vector corresponding to a magnitude of
@@ -364,14 +412,14 @@ class TwoDSystemMagOnly(TwoDimensionalSystem):
         dx_body_frame = self.contact_point[0]
         dy_body_frame = self.contact_point[1]
 
-        dx_world = dx_body_frame*np.cos(theta) - dy_body_frame*np.sin(theta)
-        dy_world = dx_body_frame*np.sin(theta) + dy_body_frame*np.cos(theta)
+        dx_world = dx_body_frame * np.cos(theta) - dy_body_frame * np.sin(theta)
+        dy_world = dx_body_frame * np.sin(theta) + dy_body_frame * np.cos(theta)
 
         loc_x = x + dx_world
         loc_y = y + dy_world
 
         # Return [fx, fy, loc_x, loc_y].
-        return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
+        return np.array([fx, fy, loc_x, loc_y]).reshape(1, 4)
 
 
 class TwoDSystemForceOnly(TwoDimensionalSystem):
@@ -387,12 +435,17 @@ class TwoDSystemForceOnly(TwoDimensionalSystem):
         contact_angle:  Nominal direction (given as an angle) in body-frame of
                         the control contact normal force.
     """
+
     params: TwoDimensionalSystemParams
     contact_point: np.array
     contact_angle: float
 
-    def __init__(self, params: TwoDimensionalSystemParams,
-                 contact_point: np.array, contact_angle: float):
+    def __init__(
+        self,
+        params: TwoDimensionalSystemParams,
+        contact_point: np.array,
+        contact_angle: float,
+    ):
         # Do some checks that the contact point and contact direction make
         # sense.
         contact_point = contact_point.squeeze()
@@ -422,14 +475,20 @@ class TwoDSystemForceOnly(TwoDimensionalSystem):
         lever_x, lever_y = self.contact_point[0], self.contact_point[1]
 
         # Build the expression.
-        gen_normal = np.array([[np.cos(world_angle)],
-                               [np.sin(world_angle)],
-                               [lever_x * np.sin(body_angle) - \
-                                lever_y * np.cos(body_angle)]])
-        gen_tangential = np.array([[-np.sin(world_angle)],
-                                   [np.cos(world_angle)],
-                                   [lever_y * np.sin(body_angle) + \
-                                    lever_x * np.cos(body_angle)]])
+        gen_normal = np.array(
+            [
+                [np.cos(world_angle)],
+                [np.sin(world_angle)],
+                [lever_x * np.sin(body_angle) - lever_y * np.cos(body_angle)],
+            ]
+        )
+        gen_tangential = np.array(
+            [
+                [-np.sin(world_angle)],
+                [np.cos(world_angle)],
+                [lever_y * np.sin(body_angle) + lever_x * np.cos(body_angle)],
+            ]
+        )
 
         return np.hstack((gen_normal, gen_tangential))
 
@@ -448,22 +507,22 @@ class TwoDSystemForceOnly(TwoDimensionalSystem):
         # First, the x and y components of the force just depend on the angle
         # of the vector.
         angle = self.contact_angle + theta
-        fx = fn*np.cos(angle) - ft*np.sin(angle)
-        fy = fn*np.sin(angle) + ft*np.cos(angle)
+        fx = fn * np.cos(angle) - ft * np.sin(angle)
+        fy = fn * np.sin(angle) + ft * np.cos(angle)
 
         # The location of the force depends on the location of the system as
         # well as the relative location of the contact location.
         dx_body_frame = self.contact_point[0]
         dy_body_frame = self.contact_point[1]
 
-        dx_world = dx_body_frame*np.cos(theta) - dy_body_frame*np.sin(theta)
-        dy_world = dx_body_frame*np.sin(theta) + dy_body_frame*np.cos(theta)
+        dx_world = dx_body_frame * np.cos(theta) - dy_body_frame * np.sin(theta)
+        dy_world = dx_body_frame * np.sin(theta) + dy_body_frame * np.cos(theta)
 
         loc_x = x + dx_world
         loc_y = y + dy_world
 
         # Return [fx, fy, loc_x, loc_y].
-        return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
+        return np.array([fx, fy, loc_x, loc_y]).reshape(1, 4)
 
 
 class TwoDSystemForceSide(TwoDimensionalSystem):
@@ -502,12 +561,12 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
                         stored as vert2 as a body-frame offset, expressed in
                         body-frame.
     """
+
     params: TwoDimensionalSystemParams
     contact_side: int
     contact_angle: float
 
-    def __init__(self, params: TwoDimensionalSystemParams,
-                 contact_side: int):
+    def __init__(self, params: TwoDimensionalSystemParams, contact_side: int):
         # Do some checks that the contact point and contact direction make
         # sense.
         assert type(contact_side) == int
@@ -518,8 +577,9 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
 
         # Get the vertex locations in body-frame, defining the side, and
         # calculate the contact angle, based on the polytope side normal.
-        vert1, vert2, contact_angle = self.__calculate_side_and_contact_angle(
-                                                                contact_side)
+        vert1, vert2, contact_angle = self._calculate_side_and_contact_angle(
+            contact_side
+        )
 
         # Save the body-frame locations of the vertices defining the side.
         self.vert1 = vert1
@@ -532,7 +592,7 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
         # Initialize the contact_point as None.
         self.contact_point = None
 
-    def __calculate_side_and_contact_angle(self, side):
+    def _calculate_side_and_contact_angle(self, side):
         """Given one of the polytope's sides (as an integer, defining side n as
         the face between vertices n and n+1), return the body-frame locations of
         vertices n and n+1 as well as calculate the angle of the nominal inward
@@ -547,7 +607,7 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
 
         # Side n is defined as the face between vertices n and n+1.
         vert1 = polytope.params.vertex_locations[side, :]
-        vert2 = polytope.params.vertex_locations[(side+1) % total_verts, :]
+        vert2 = polytope.params.vertex_locations[(side + 1) % total_verts, :]
 
         dx = vert2[0] - vert1[0]
         dy = vert2[1] - vert1[1]
@@ -560,7 +620,7 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
 
         return vert1, vert2, contact_angle
 
-    def __update_contact_point(self, controls):
+    def _update_contact_point(self, controls):
         """Given controls as a (3,) vector, interpret the third number as an
         interpolation coefficient between the side's first and second vertex.
         The interpolation should return vert1 for interp = 0 and vert2 for
@@ -576,7 +636,7 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
         assert (interp >= 0) and (interp <= 1)
 
         # Interpolate between the side's defining vertices.
-        self.contact_point = self.vert1 + interp*(self.vert2 - self.vert1)
+        self.contact_point = self.vert1 + interp * (self.vert2 - self.vert1)
 
     def get_map_from_controls_to_gen_coordinates(self, state, controls):
         """Given controls as a (3,) vector corresponding to a magnitude of
@@ -593,18 +653,24 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
 
         # The torque additionally depends on the body-frame contact location,
         # which can be calculated based on the current contact point location.
-        self.__update_contact_point(controls)
+        self._update_contact_point(controls)
         lever_x, lever_y = self.contact_point[0], self.contact_point[1]
 
         # Build the expression.
-        gen_normal = np.array([[np.cos(world_angle)],
-                               [np.sin(world_angle)],
-                               [lever_x * np.sin(body_angle) - \
-                                lever_y * np.cos(body_angle)]])
-        gen_tangential = np.array([[-np.sin(world_angle)],
-                                   [np.cos(world_angle)],
-                                   [lever_y * np.sin(body_angle) + \
-                                    lever_x * np.cos(body_angle)]])
+        gen_normal = np.array(
+            [
+                [np.cos(world_angle)],
+                [np.sin(world_angle)],
+                [lever_x * np.sin(body_angle) - lever_y * np.cos(body_angle)],
+            ]
+        )
+        gen_tangential = np.array(
+            [
+                [-np.sin(world_angle)],
+                [np.cos(world_angle)],
+                [lever_y * np.sin(body_angle) + lever_x * np.cos(body_angle)],
+            ]
+        )
         gen_interp = np.zeros_like(gen_normal)
 
         return np.hstack((gen_normal, gen_tangential, gen_interp))
@@ -625,22 +691,21 @@ class TwoDSystemForceSide(TwoDimensionalSystem):
         # First, the x and y components of the force just depend on the angle
         # of the vector.
         angle = self.contact_angle + theta
-        fx = fn*np.cos(angle) - ft*np.sin(angle)
-        fy = fn*np.sin(angle) + ft*np.cos(angle)
+        fx = fn * np.cos(angle) - ft * np.sin(angle)
+        fy = fn * np.sin(angle) + ft * np.cos(angle)
 
         # The location of the force depends on the location of the system as
         # well as the relative location of the contact location, which can be
         # calculated based on the current contact point location.
-        self.__update_contact_point(controls)
+        self._update_contact_point(controls)
         dx_body_frame = self.contact_point[0]
         dy_body_frame = self.contact_point[1]
 
-        dx_world = dx_body_frame*np.cos(theta) - dy_body_frame*np.sin(theta)
-        dy_world = dx_body_frame*np.sin(theta) + dy_body_frame*np.cos(theta)
+        dx_world = dx_body_frame * np.cos(theta) - dy_body_frame * np.sin(theta)
+        dy_world = dx_body_frame * np.sin(theta) + dy_body_frame * np.cos(theta)
 
         loc_x = x + dx_world
         loc_y = y + dy_world
 
         # Return [fx, fy, loc_x, loc_y].
-        return np.array([fx, fy, loc_x, loc_y]).reshape(1,4)
-
+        return np.array([fx, fy, loc_x, loc_y]).reshape(1, 4)
