@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
-import pdb
 import sympy
 
 from scipy.spatial import ConvexHull
@@ -105,6 +104,7 @@ class TwoDimensionalPolytope:
         delta:          The angle between the ground and the face clockwise of
                         the lowest_vertex when theta = 0.
     """
+
     params: TwoDimensionalPolytopeParams
 
     def __init__(self, params: TwoDimensionalPolytopeParams):
@@ -113,7 +113,7 @@ class TwoDimensionalPolytope:
         # Compute the convex hull of the polytope for more efficient simulation
         # later and for easier control.
         vertex_locations = self.params.vertex_locations
-        hull_vertices = self.__get_convex_hull_vertices(vertex_locations)
+        hull_vertices = self._get_convex_hull_vertices(vertex_locations)
 
         # Save the convex hull.
         self.hull_vertices = hull_vertices
@@ -125,12 +125,12 @@ class TwoDimensionalPolytope:
         self.n_dims = 2
 
         # Analyze and store properties about the geometry.
-        self.__analyze_and_store_geometry()
+        self._analyze_and_store_geometry()
 
         # Set up a Jacobian function for later calculation of contact Jacobians.
-        self.jac_func = self.__set_up_contact_jacobian_function()
+        self.jac_func = self._set_up_contact_jacobian_function()
 
-    def __get_convex_hull_vertices(self, vertex_locations):
+    def _get_convex_hull_vertices(self, vertex_locations):
         """Compute the convex hull of the provided vertices and return the pared
         down numpy array of vertices in clockwise order."""
 
@@ -153,8 +153,11 @@ class TwoDimensionalPolytope:
 
         # If for visualization purposes, want to include all the vertices.
         # Otherwise, just include the convex hull vertices.
-        vertices = self.params.vertex_locations if for_visualization else \
-                   self.hull_vertices
+        vertices = (
+            self.params.vertex_locations
+            if for_visualization
+            else self.hull_vertices
+        )
 
         p = vertices.shape[0]
 
@@ -164,10 +167,14 @@ class TwoDimensionalPolytope:
             corner_body = vertices[i, :]
 
             phi = np.arctan2(corner_body[1], corner_body[0])
-            radius = np.sqrt(corner_body[1]**2 + corner_body[0]**2)
+            radius = np.sqrt(corner_body[1] ** 2 + corner_body[0] ** 2)
 
-            corners_world[i, :] = np.array([x + radius * np.cos(phi + theta),
-                                            y + radius * np.sin(phi + theta)])
+            corners_world[i, :] = np.array(
+                [
+                    x + radius * np.cos(phi + theta),
+                    y + radius * np.sin(phi + theta),
+                ]
+            )
 
         return corners_world
 
@@ -181,8 +188,11 @@ class TwoDimensionalPolytope:
 
         # If for visualization purposes, want to include all the vertices.
         # Otherwise, just include the convex hull vertices.
-        vertices = self.params.vertex_locations if for_visualization else \
-                   self.hull_vertices
+        vertices = (
+            self.params.vertex_locations
+            if for_visualization
+            else self.hull_vertices
+        )
 
         p = vertices.shape[0]
 
@@ -197,7 +207,7 @@ class TwoDimensionalPolytope:
 
         return radii, angles
 
-    def __get_vertex_velocities_world(self, state):
+    def _get_vertex_velocities_world(self, state):
         """Get the velocities of the polytope's vertices in world coordinates,
         given the system's current state.  Returns a numpy array of size
         (n_contacts, 2) for the (vx,vy) velocity of each vertex."""
@@ -218,11 +228,12 @@ class TwoDimensionalPolytope:
             rotx_contribution = -vth * radius * np.sin(phi + theta)
             roty_contribution = vth * radius * np.cos(phi + theta)
 
-            corner_velocities[i, :] = np.array([vx + rotx_contribution,
-                                                vy + roty_contribution])
+            corner_velocities[i, :] = np.array(
+                [vx + rotx_contribution, vy + roty_contribution]
+            )
         return corner_velocities
 
-    def __set_up_contact_jacobian_function(self):
+    def _set_up_contact_jacobian_function(self):
         """Create a callable function that returns the (2, 3) jacobian
         representing the partial derivative of a vertex's world-frame velocity
         with respect to the polytope's world-frame velocity.  This left-
@@ -234,7 +245,8 @@ class TwoDimensionalPolytope:
         # First, write a symbolic expression of a vertex's velocity given its
         # location relative to the object's CoM and the object's velocities.
         px_body, py_body, theta, vx, vy, vth = sympy.symbols(
-                                            'px_body py_body theta vx vy vth')
+            "px_body py_body theta vx vy vth"
+        )
 
         phi = sympy.atan2(py_body, px_body)
         radius = sympy.sqrt(px_body**2 + py_body**2)
@@ -248,15 +260,20 @@ class TwoDimensionalPolytope:
         # (this is the gradient of the vertex's velocity w.r.t. the system's
         # velocities [vx, vy, vth]).  This will be of shape (n_dims, n_config)
         # or (2, 3).
-        contact_jac = sympy.Matrix([corner_vel.diff(vx).T,
-                                    corner_vel.diff(vy).T,
-                                    corner_vel.diff(vth).T]).T
-        jac_func = sympy.lambdify([px_body, py_body, theta, vx, vy, vth],
-                                  contact_jac, 'numpy')
+        contact_jac = sympy.Matrix(
+            [
+                corner_vel.diff(vx).T,
+                corner_vel.diff(vy).T,
+                corner_vel.diff(vth).T,
+            ]
+        ).T
+        jac_func = sympy.lambdify(
+            [px_body, py_body, theta, vx, vy, vth], contact_jac, "numpy"
+        )
 
         return jac_func
 
-    def __calculate_contact_jacobian_along_projections(self, state, projs):
+    def _calculate_contact_jacobian_along_projections(self, state, projs):
         """Calculate the contact jacobian of all vertices along given projection
         direction(s)."""
 
@@ -297,7 +314,7 @@ class TwoDimensionalPolytope:
 
         # Use projection in +/- x-directions.
         projs = np.array([[1, 0], [-1, 0]])
-        return self.__calculate_contact_jacobian_along_projections(state, projs)
+        return self._calculate_contact_jacobian_along_projections(state, projs)
 
     def get_N_matrix(self, state):
         """Calculate the normal contact jacobian of all vertices. Returns a
@@ -307,7 +324,7 @@ class TwoDimensionalPolytope:
 
         # Use projection in y-direction.
         proj = np.array([[0, 1]])
-        return self.__calculate_contact_jacobian_along_projections(state, proj)
+        return self._calculate_contact_jacobian_along_projections(state, proj)
 
     def get_mu_matrix(self, _):
         """Calculate the friction matrix.  We assume this is not state
@@ -325,7 +342,7 @@ class TwoDimensionalPolytope:
         p = self.n_contacts
         k = self.n_friction
 
-        return np.kron(np.eye(p, dtype=int), np.ones((k,1)))
+        return np.kron(np.eye(p, dtype=int), np.ones((k, 1)))
 
     def get_C_matrix(self, _):
         """Calculate the (n_config, n_config) Coriolis/centrifugal matrix.  This
@@ -344,7 +361,7 @@ class TwoDimensionalPolytope:
 
         m = self.params.mass
         g = -9.81
-        return np.array([0, -m*g, 0]).reshape(self.n_config, 1)
+        return np.array([0, -m * g, 0]).reshape(self.n_config, 1)
 
     def get_k_vector(self, state):
         """Calculate the (n_config, 1) vector of continuous forces.  This vector
@@ -369,7 +386,7 @@ class TwoDimensionalPolytope:
         corners = self.get_vertex_locations_world(state)
         return corners[:, 1].reshape(self.n_contacts, 1)
 
-    def __analyze_and_store_geometry(self):
+    def _analyze_and_store_geometry(self):
         """This method analyzes the geometry of the polytope's convex hull.
         Specifically, this method calculates and stores the vectors alphas,
         betas, gammas, sides, and psis, as well as the quantities lowest_vertex
@@ -389,8 +406,8 @@ class TwoDimensionalPolytope:
         # vertices.
         for i in range(p):
             # Grab the radii and angles of the current triangle.
-            r1, r2 = radii[i], radii[(i+1)%p]
-            a1, a2 = angles[i], angles[(i+1)%p]
+            r1, r2 = radii[i], radii[(i + 1) % p]
+            a1, a2 = angles[i], angles[(i + 1) % p]
 
             # The angle defined with the origin at the middle is the difference
             # between the angles for each vertex.
@@ -398,9 +415,9 @@ class TwoDimensionalPolytope:
 
             # Use the law of cosines to determine the exterior side length, then
             # the two unknown interior angles.
-            r12 = np.sqrt(r1**2 + r2**2 - 2*r1*r2*np.cos(a12))
-            b12 = np.arccos(r1/r12 - r2/r12 * np.cos(a12))
-            c12 = np.arccos(r2/r12 - r1/r12 * np.cos(a12))
+            r12 = np.sqrt(r1**2 + r2**2 - 2 * r1 * r2 * np.cos(a12))
+            b12 = np.arccos(r1 / r12 - r2 / r12 * np.cos(a12))
+            c12 = np.arccos(r2 / r12 - r1 / r12 * np.cos(a12))
 
             # Set the correct indices in the storage arrays.
             sides[i], alphas[i], betas[i], gammas[i] = r12, a12, b12, c12
@@ -408,10 +425,10 @@ class TwoDimensionalPolytope:
         # Calculate psis after the rest of the vectors are filled in.
         for i in range(p):
             # Grab the relevant beta and gamma value.
-            b23 = betas[(i+1)%p]
+            b23 = betas[(i + 1) % p]
             c12 = gammas[i]
 
-            psis[(i+1)%p] = np.pi - b23 - c12
+            psis[(i + 1) % p] = np.pi - b23 - c12
 
         # Find the vertex that would be in contact at theta=0.  If multiple (the
         # most it could be is 2), choose the one that is most clockwise.
@@ -421,8 +438,10 @@ class TwoDimensionalPolytope:
 
         # Calculate the angle delta from the ground to the face counter
         # clockwise from the lowest vertex at theta = 0.
-        dist = self.hull_vertices[(lowest_vertex - 1) % p] - \
-               self.hull_vertices[lowest_vertex]
+        dist = (
+            self.hull_vertices[(lowest_vertex - 1) % p]
+            - self.hull_vertices[lowest_vertex]
+        )
         delta = np.arctan2(dist[1], dist[0])
 
         # Store all of the calculated geometry.
@@ -462,4 +481,3 @@ class TwoDimensionalPolytope:
 
         # Return theta_v and the index of the pivoting vertex.
         return theta_v, pivot_index
-
