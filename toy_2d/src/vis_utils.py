@@ -9,7 +9,10 @@ from matplotlib.patches import Polygon
 
 from toy_2d.src import file_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
-from toy_2d.src.two_dim_spring_network import TwoDimensionalSpringNetwork
+from toy_2d.src.two_dim_spring_network import (
+    TwoDimensionalSpringNetwork,
+    TwoDimensionalPlasticNetwork,
+)
 
 
 FORCE_SCALING = 1.0  # Scaling factor for viewing forces.
@@ -74,16 +77,20 @@ def animation_gif_polytope(
     if type(polytope) == TwoDimensionalPolytope:
         poly = Polygon(init_corners, closed=True)
         ax.add_patch(poly)
-    elif type(polytope) == TwoDimensionalSpringNetwork:
-        springs = []
+    elif type(polytope) in [
+        TwoDimensionalSpringNetwork,
+        TwoDimensionalPlasticNetwork,
+    ]:
+        connectors = []
+        color = "g-" if type(polytope) == TwoDimensionalSpringNetwork else "k-"
         for i, j in polytope.params.connections:
             (line,) = ax.plot(
                 [init_corners[i, 0], init_corners[j, 0]],
                 [init_corners[i, 1], init_corners[j, 1]],
-                "k-",
+                color,
                 linewidth=2,
             )
-            springs.append(line)
+            connectors.append(line)
 
     (corner_dots,) = ax.plot(
         init_corners[:, 0], init_corners[:, 1], "ro", markersize=8, linewidth=0
@@ -123,8 +130,11 @@ def animation_gif_polytope(
 
         if type(polytope) == TwoDimensionalPolytope:
             poly.set(xy=new_corners)
-        elif type(polytope) == TwoDimensionalSpringNetwork:
-            for idx, (line) in enumerate(springs):
+        elif type(polytope) in [
+            TwoDimensionalSpringNetwork,
+            TwoDimensionalPlasticNetwork,
+        ]:
+            for idx, (line) in enumerate(connectors):
                 i, j = polytope.params.connections[idx]
                 line.set_xdata([new_corners[i, 0], new_corners[j, 0]])
                 line.set_ydata([new_corners[i, 1], new_corners[j, 1]])

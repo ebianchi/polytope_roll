@@ -11,6 +11,7 @@ from toy_2d.src import solver_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 from toy_2d.src.two_dim_spring_network import (
     TwoDimensionalParticle,
+    TwoDimensionalPlasticNetwork,
     TwoDimensionalSpringNetwork,
 )
 
@@ -68,6 +69,15 @@ class TwoDimensionalSystem:
         self.control_history = np.zeros((0, 4))
         self.lambda_history = np.zeros((0, p * (k + 2)))
         self.output_history = np.zeros((0, p * (k + 2)))
+
+        if type(self.params.polytope) == TwoDimensionalPlasticNetwork:
+            # There are more lambda and output variables to keep track of for
+            # plastic networks.
+            q = self.params.polytope.n_plastic
+            l = self.params.polytope.n_internal_friction
+
+            self.lambda_history = np.zeros((0, p * (k + 2) + q * (l + 1)))
+            self.output_history = np.zeros((0, p * (k + 2) + q * (l + 1)))
 
     def _check_consistent_histories(self):
         """Check that the history lengths are compatible."""
@@ -233,6 +243,52 @@ class TwoDimensionalSystem:
         vec_mid = (1.0 / dt) * phi + N.T @ (v0 + dt * M_i @ (k + u))
         vec_bot = np.zeros((p, 1))
 
+        # Incorporate any internal plastic forces.
+        if type(polytope) == TwoDimensionalPlasticNetwork:
+            q_plastic = polytope.n_plastic
+            l = polytope.n_internal_friction
+
+            D_internal = polytope.get_D_internal_matrix(state)
+            E_internal = polytope.get_E_internal_matrix(state)
+            f_yield = polytope.get_f_yield_vector(state)
+
+            # The internal forces couple into the external contact blocks.
+            mat_top = np.hstack(
+                (
+                    mat_top,
+                    D.T @ M_i @ D_internal,
+                    np.zeros((p * k_friction, q_plastic)),
+                )
+            )
+            mat_mid = np.hstack(
+                (mat_mid, N.T @ M_i @ D_internal, np.zeros((p, q_plastic)))
+            )
+            mat_bot = np.hstack((mat_bot, np.zeros((p, q_plastic * (l + 1)))))
+
+            # Combine external force portion as "top" so "mid" and "bot" can
+            # become the internal force sliding magnitude and yield constraints.
+            mat_top = np.vstack((mat_top, mat_mid, mat_bot))
+            mat_mid = np.hstack(
+                (
+                    D_internal.T @ M_i @ D,
+                    D_internal.T @ M_i @ N,
+                    np.zeros((q_plastic * l, p)),
+                    D_internal.T @ M_i @ D_internal,
+                    E_internal,
+                )
+            )
+            mat_bot = np.hstack(
+                (
+                    np.zeros((q_plastic, p * (k_friction + 2))),
+                    -E_internal.T,
+                    np.zeros((q_plastic, q_plastic)),
+                )
+            )
+
+            vec_top = np.vstack((vec_top, vec_mid, vec_bot))
+            vec_mid = D_internal.T @ (v0 + dt * M_i @ (k + u))
+            vec_bot = dt * f_yield
+
         lcp_mat = np.vstack((mat_top, mat_mid, mat_bot))
         lcp_vec = np.vstack((vec_top, vec_mid, vec_bot))
 
@@ -243,6 +299,14 @@ class TwoDimensionalSystem:
         Cn = lcp_sol[p * k_friction : p * k_friction + p].reshape(p, 1)
 
         v_next = v0 + M_i @ (N @ Cn + D @ Beta + dt * (k + u))
+
+        # If there are plastic forces, incorporate into the forward dynamics.
+        if type(polytope) == TwoDimensionalPlasticNetwork:
+            sigma = lcp_sol[
+                p * (k_friction + 2) : p * (k_friction + 2) + q_plastic * l
+            ].reshape(q_plastic * l, 1)
+            v_next += M_i @ D_internal @ sigma
+
         q_next = q0 + dt * v_next
 
         v_next = v_next.reshape((n_q,))
@@ -305,7 +369,10 @@ class TwoDimensionalSystem:
                     [0.0, 1.0, 0.0, 0.0],
                 ]
             )
-        elif type(self.params.polytope) == TwoDimensionalSpringNetwork:
+        elif type(self.params.polytope) in [
+            TwoDimensionalSpringNetwork,
+            TwoDimensionalPlasticNetwork,
+        ]:
             P = np.array(
                 [
                     [1.0, 0.0, 0.0, 0.0],

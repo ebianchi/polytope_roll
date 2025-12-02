@@ -335,3 +335,153 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
         each vertex and the ground."""
 
         return TwoDimensionalPolytope.get_phi(self, state)
+
+
+@dataclass
+class TwoDimensionalPlasticNetworkParams:
+    particles: List[TwoDimensionalParticle] = field(default_factory=list)
+    connections: List[tuple] = field(default_factory=list)
+    yield_forces: List[float] = field(default_factory=list)
+
+    def __post_init__(self):
+        assert len(self.particles) > 0, "There must be at least one mass."
+        assert len(self.connections) == len(
+            self.yield_forces
+        ), "There must be a spring constant and length for each connection."
+        for conn in self.connections:
+            assert (
+                conn[0] < len(self.particles)
+                and conn[1] < len(self.particles)
+                and conn[0] != conn[1]
+            ), (
+                "Connection indices must be unique pairs of valid particle "
+                + "indices."
+            )
+        for yield_force in self.yield_forces:
+            assert yield_force >= 0, "Yield forces cannot be negative."
+
+
+class TwoDimensionalPlasticNetwork(TwoDimensionalSpringNetwork):
+    """A 2D network of particles connected by frictional prismatic joints.  This
+    can be interpreted as "plastic" connections.  These plastic connections will
+    have what can be interpreted as internal contact forces in them that resist
+    motion until a yield force is exceeded.  These internal forces are not
+    described here, but the class supports solving for them by providing the
+    necessary quantities:
+        - D_internal:  (n_config, n_plastic*n_internal_friction) matrix
+        - E_internal:  (n_plastic*n_internal_friction, n_plastic) matrix
+        - f_yield:     (n_plastic,) vector
+
+    Impose the same state structure as for the spring network:
+        state = [x1, dx1, y1, dy1, x2, dx2, y2, dy2, ..., xn, dxn, yn, dyn]
+
+    Properties:
+        params:         2D plastic network parameters.
+    """
+
+    params: TwoDimensionalPlasticNetworkParams
+
+    def __init__(self, params: TwoDimensionalPlasticNetworkParams):
+        super().__init__(params)
+
+        self.n_plastic = len(self.params.connections)
+        self.n_internal_friction = 2  # Tangential directions between connected
+        # particles only (whether 2D or 3D system).
+
+    def d_pdot_d_qdot_jac_func(self, particle_i):
+        """A function defined by:
+          Inputs:
+            - particle_i:  the particle index
+          Returns:
+            - The (n_dims, n_config) jacobian representing the partial
+              derivative of the particle's world-frame velocity with respect to
+              the system's world-frame velocity.
+
+        Since the system state includes all particles' positions and velocities,
+        this jacobian picks out the relevant portion for the given particle.
+
+        This left- multiplied by a unit direction vector(s) yields the normal
+        (corresponding to a vertical unit vector) and tangential (corresponding
+        to horizontal unit vectors) contact jacobians later used for simulation.
+        """
+        d = self.n_dims
+        jac = np.zeros((d, self.n_config))
+        jac[:, d * particle_i : d * (particle_i + 1)] = np.eye(d)
+
+        return jac
+
+    def get_D_internal_matrix(self, state):
+        """Calculate the tangential contact jacobian for all internal particle-
+        particle plastic connections. Returns a numpy array of size (n_config,
+        n_plastic * n_internal_friction)."""
+        # The resulting matrix will be of size (n_config, n_contacts * n_projs).
+        n = self.n_config
+        q = self.n_plastic
+        l = self.n_internal_friction
+
+        # Initialize to all zeros.
+        D_internal = np.zeros((n, q * l))
+
+        # Iterate over each internal contact (i.e. plastic connection).
+        for i_plastic in range(self.n_plastic):
+            conn = self.params.connections[i_plastic]
+            p1_idx = conn[0]
+            p2_idx = conn[1]
+
+            # Define tangential direction vectors based on particle locations.
+            p1 = self._get_particle_state_from_system_state(state, p1_idx)[
+                [0, 2]
+            ]
+            p2 = self._get_particle_state_from_system_state(state, p2_idx)[
+                [0, 2]
+            ]
+            unit_1_to_2 = p2 - p1
+            unit_1_to_2 /= np.linalg.norm(unit_1_to_2)
+            tangential_dirs = np.vstack((unit_1_to_2, -unit_1_to_2))
+
+            # Get the contact jacobians for each particle along these
+            # directions.
+            J_p1 = self.d_pdot_d_qdot_jac_func(p1_idx)
+            J_p2 = self.d_pdot_d_qdot_jac_func(p2_idx)
+
+            # Fill in the appropriate blocks of D_internal.
+            D_internal[:, i_plastic * l : (i_plastic + 1) * l] = (
+                tangential_dirs @ (J_p2 - J_p1)
+            ).T
+
+        return D_internal
+
+    def get_E_internal_matrix(self, _):
+        """Calculate the matrix E_internal, defined by a block diagonal matrix
+        composed of n_plastic repeats of ones vectors of size
+        (n_internal_friction, 1), or (2, 1) for this 2D example.  This is fixed
+        and thus is not state dependent."""
+
+        q = self.n_plastic
+        l = self.n_internal_friction
+
+        return np.kron(np.eye(q, dtype=int), np.ones((l, 1)))
+
+    def get_f_yield_vector(self, _):
+        """Calculate the (n_plastic, 1) vector of yield forces for each plastic
+        connection.  This is fixed and thus is not state dependent."""
+        return np.array(self.params.yield_forces).reshape(self.n_plastic, 1)
+
+    def get_k_vector(self, state):
+        """Calculate the (n_config, 1) vector of continuous forces.  This is
+        composed of stacked blocks for each particle's k vector:
+
+            k_particle = -C*v - G
+
+        This requires overwriting the TwoDimensionalSpringNetwork version since
+        there are no spring forces here."""
+        k = np.zeros((self.n_config))
+        for i in range(self.n_contacts):
+            particle_state = self._get_particle_state_from_system_state(
+                state, i
+            )
+            k[2 * i : 2 * (i + 1)] = (
+                self.params.particles[i].get_k_vector(particle_state).reshape(2)
+            )
+
+        return k.reshape(self.n_config, 1)
