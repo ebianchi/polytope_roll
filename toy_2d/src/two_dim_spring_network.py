@@ -54,8 +54,10 @@ class TwoDimensionalParticle(TwoDimensionalPolytope):
         self.n_friction = 2
         self.n_dims = 2
 
-        # Set up a Jacobian function for later calculation of contact Jacobians.
-        self.jac_basis = self._set_up_contact_jacobian()
+        # The Jacobian of "a point on the particle", i.e. the particle itself,
+        # with respect to the particle's world-frame velocity is simply the
+        # identity.
+        self.d_pdot_d_qdot_jac = np.eye(2)
 
     def get_vertex_locations_world(self, state, for_visualization=False):
         """Get the locations of the particle's single vertex in world
@@ -67,29 +69,20 @@ class TwoDimensionalParticle(TwoDimensionalPolytope):
 
         return np.array([x, y]).reshape(1, 2)
 
-    def _set_up_contact_jacobian(self):
-        """The partial derivative of a particle's world-frame velocity with
-        respect to the particle's world-frame velocity is simply the identity.
-        This left-multiplied by a unit direction vector(s) yields the normal
-        (corresponding to a vertical unit vector) and tangential (corresponding
-        to horizontal unit vectors) contact jacobians later used for simulation.
-        """
-        return np.eye(2)
-
     def _calculate_contact_jacobian_along_projections(self, _state, projs):
         """Calculate the contact jacobian of the particle along given projection
         direction(s).  Note that since the particle's state is the system's
         state itself, this is a constant function for a given projection."""
 
-        # The resulting matrix will be of size (n_config, n_contacts * n_projs).
+        # The resulting matrix will be of size (n_config, n_contacts * n_projs),
+        # which is (n_config, n_projs) for a particle since n_contacts = 1.
         n = self.n_config
-        p = self.n_contacts
+        k = projs.shape[0]
+        contact_jac = np.zeros((n, k))
 
-        contact_jac = np.zeros((n, 0))
-
-        # We can use the contact Jacobian function for each vertex.
-        for _vertex_i in range(p):
-            contact_jac = np.hstack((contact_jac, (projs @ self.jac_basis).T))
+        # There is just one contact for a particle, and the jacobian is not
+        # state-dependent.
+        contact_jac = (projs @ self.d_pdot_d_qdot_jac).T
 
         return contact_jac
 
@@ -183,11 +176,17 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
         self.n_friction = 2
         self.n_dims = 2
 
-    def __get_particle_state_from_system_state(
+    def _get_particle_state_from_system_state(
         self, system_state, particle_index
     ):
         """Extract the state of a single particle from the full system state."""
-        return system_state[4 * particle_index : 4 * (particle_index + 1)]
+        return system_state[
+            2
+            * self.n_dims
+            * particle_index : 2
+            * self.n_dims
+            * (particle_index + 1)
+        ]
 
     def get_vertex_locations_world(self, state, for_visualization=False):
         """Get the locations of the particle's single vertex in world
@@ -197,7 +196,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
         vertex_locs = np.zeros((self.n_contacts, 2))
 
         for i in range(self.n_contacts):
-            particle_state = self.__get_particle_state_from_system_state(
+            particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             vertex_locs[i] = self.params.particles[
@@ -213,7 +212,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
         particle's mass matrix along the diagonal."""
         M = np.zeros((self.n_config, self.n_config))
         for i in range(self.n_contacts):
-            particle_state = self.__get_particle_state_from_system_state(
+            particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             M[2 * i : 2 * (i + 1), 2 * i : 2 * (i + 1)] = self.params.particles[
@@ -232,7 +231,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
 
         D = np.zeros((self.n_config, self.n_contacts * self.n_friction))
         for i in range(self.n_contacts):
-            particle_state = self.__get_particle_state_from_system_state(
+            particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             D[2 * i : 2 * (i + 1), i * (p * k) : (i + 1) * (p * k)] = (
@@ -250,7 +249,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
 
         N = np.zeros((self.n_config, self.n_contacts))
         for i in range(self.n_contacts):
-            particle_state = self.__get_particle_state_from_system_state(
+            particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             N[2 * i : 2 * (i + 1), i * p : (i + 1) * p] = self.params.particles[
@@ -274,7 +273,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
 
         g = np.zeros((self.n_config))
         for i in range(self.n_contacts):
-            particle_state = self.__get_particle_state_from_system_state(
+            particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             g[2 * i : 2 * (i + 1)] = (
@@ -295,7 +294,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
         # and gravity.
         k = np.zeros((self.n_config))
         for i in range(self.n_contacts):
-            particle_state = self.__get_particle_state_from_system_state(
+            particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             k[2 * i : 2 * (i + 1)] = (
@@ -311,10 +310,10 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
             rest_length = self.params.rest_lengths[i_spring]
 
             # Get particle positions.
-            p1 = self.__get_particle_state_from_system_state(state, p1_idx)[
+            p1 = self._get_particle_state_from_system_state(state, p1_idx)[
                 [0, 2]
             ]
-            p2 = self.__get_particle_state_from_system_state(state, p2_idx)[
+            p2 = self._get_particle_state_from_system_state(state, p2_idx)[
                 [0, 2]
             ]
 

@@ -1,8 +1,8 @@
-"""This file describes a toy 2D system of an arbitrary polytope.
+"""This file describes a toy 2D system of an arbitrary spring particle network.
 
-The state keeps track of the center of mass x and y positions plus the angle
-theta from the ground's axes to the body's axes, in addition to time derivatives
-of all 3 of these quantities:  thus the state vector is 6-dimensional.
+The state keeps track of each particle's x and y location in addition to time
+derivatives of all of these quantities:  thus the state vector is
+(4*n_particles)-dimensional.
 """
 
 import numpy as np

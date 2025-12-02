@@ -128,7 +128,7 @@ class TwoDimensionalPolytope:
         self._analyze_and_store_geometry()
 
         # Set up a Jacobian function for later calculation of contact Jacobians.
-        self.jac_func = self._set_up_contact_jacobian_function()
+        self.d_pdot_d_qdot_jac_func = self._set_up_contact_jacobian_function()
 
     def _get_convex_hull_vertices(self, vertex_locations):
         """Compute the convex hull of the provided vertices and return the pared
@@ -213,16 +213,13 @@ class TwoDimensionalPolytope:
         (n_contacts, 2) for the (vx,vy) velocity of each vertex."""
 
         # State is in form [x, dx, y, dy, th, dth].
-        x, y, theta = state[0], state[2], state[4]
-        vx, vy, vth = state[1], state[3], state[5]
+        theta, vx, vy, vth = state[4], state[1], state[3], state[5]
 
         p = self.n_contacts
         radii, angles = self.get_vertex_radii_angles()
         corner_velocities = np.zeros((p, 2))
 
         for i in range(p):
-            corner_body = self.hull_vertices[i, :]
-
             radius, phi = radii[i], angles[i]
 
             rotx_contribution = -vth * radius * np.sin(phi + theta)
@@ -234,19 +231,27 @@ class TwoDimensionalPolytope:
         return corner_velocities
 
     def _set_up_contact_jacobian_function(self):
-        """Create a callable function that returns the (2, 3) jacobian
-        representing the partial derivative of a vertex's world-frame velocity
-        with respect to the polytope's world-frame velocity.  This left-
-        multiplied by a unit direction vector(s) yields the normal
+        """Create a callable function defined by:
+          Inputs:
+            - p (2,):  the (x, y) location of a point in body frame
+            - state (6,):  the system state [x, dx, y, dy, th, dth]
+          Returns:
+            - The (n_dims, n_config) jacobian (which is (2, 3)) representing the
+              partial derivative of the point's world-frame velocity with
+              respect to the polytope's world-frame velocity.
+
+        This left- multiplied by a unit direction vector(s) yields the normal
         (corresponding to a vertical unit vector) and tangential (corresponding
         to horizontal unit vectors) contact jacobians later used for simulation.
         """
 
         # First, write a symbolic expression of a vertex's velocity given its
         # location relative to the object's CoM and the object's velocities.
-        px_body, py_body, theta, vx, vy, vth = sympy.symbols(
-            "px_body py_body theta vx vy vth"
+        px_body, py_body, x, y, theta, vx, vy, vth = sympy.symbols(
+            "px_body py_body x y theta vx vy vth"
         )
+        p = (px_body, py_body)
+        state = (x, vx, y, vy, theta, vth)
 
         phi = sympy.atan2(py_body, px_body)
         radius = sympy.sqrt(px_body**2 + py_body**2)
@@ -267,33 +272,26 @@ class TwoDimensionalPolytope:
                 corner_vel.diff(vth).T,
             ]
         ).T
-        jac_func = sympy.lambdify(
-            [px_body, py_body, theta, vx, vy, vth], contact_jac, "numpy"
-        )
+        jac_func = sympy.lambdify([p, state], contact_jac, "numpy")
 
         return jac_func
 
     def _calculate_contact_jacobian_along_projections(self, state, projs):
         """Calculate the contact jacobian of all vertices along given projection
-        direction(s)."""
-
-        # State is in form [x, dx, y, dy, th, dth].
-        x, y, theta = state[0], state[2], state[4]
-        vx, vy, vth = state[1], state[3], state[5]
+        direction(s), where projs is (n_projs, n_dims) or (n_projs, 2)."""
 
         # The resulting matrix will be of size (n_config, n_contacts * n_projs).
         n = self.n_config
         p = self.n_contacts
+        k = projs.shape[0]
 
-        contact_jac = np.zeros((n, 0))
+        contact_jac = np.zeros((n, p * k))
 
         # We can use the contact Jacobian function for each vertex.
         for vertex_i in range(p):
-            px_body, py_body = self.hull_vertices[vertex_i, :]
-
-            jac = self.jac_func(px_body, py_body, theta, vx, vy, vth)
-
-            contact_jac = np.hstack((contact_jac, (projs @ jac).T))
+            p_vertex = self.hull_vertices[vertex_i, :]
+            jac = self.d_pdot_d_qdot_jac_func(p_vertex, state)
+            contact_jac[:, vertex_i * k : (vertex_i + 1) * k] = (projs @ jac).T
 
         return contact_jac
 

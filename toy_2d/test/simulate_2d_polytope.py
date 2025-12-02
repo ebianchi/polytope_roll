@@ -67,7 +67,7 @@ system = TwoDSystemForceOnly(system_params, CONTACT_LOC, CONTACT_ANGLE)
 system.set_initial_state(x0)
 for _ in range(1250):
     # Apply a force -- give a normal and tangential component.
-    control = np.array([0.1, 0.5])
+    control = 1 * np.array([0.1, 0.5])
 
     system.step_dynamics(control)
 
@@ -75,11 +75,6 @@ for _ in range(1250):
 states = system.state_history
 controls = system.control_history
 control_forces, control_locs = controls[:, :2], controls[:, 2:]
-
-breakpoint()
-
-# Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, "simulated_2d_traj", save=False)
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(
@@ -91,5 +86,8 @@ vis_utils.animation_gif_polytope(
     save=False,
     force_scale=10.0,
 )
+
+# Generate a plot of the simulated rollout.
+vis_utils.traj_plot(states, controls, "simulated_2d_traj", save=False)
 
 breakpoint()

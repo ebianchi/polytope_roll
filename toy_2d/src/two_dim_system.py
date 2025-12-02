@@ -170,19 +170,16 @@ class TwoDimensionalSystem:
         """Set the initial state of the system.  This method will automatically
         clear out the state, control, and contact force histories of the system
         and set the initial state to that provided as an argument."""
-
-        # Get the number of contacts and friction cone directions from the
-        # system's polytope parameters.
         n_x = 2 * self.params.polytope.n_config
-        p = self.params.polytope.n_contacts
-        k = self.params.polytope.n_friction
 
         # Clear out the histories, setting the first state_history entry to the
-        # provided state and emptying the other histories.
+        # provided state and emptying the other histories.  This maintains the
+        # number of elements per entry in each history, except it will throw a
+        # runtime error if the provided state is not the correct size.
         self.state_history = state.reshape(1, n_x)
-        self.control_history = np.zeros((0, 4))
-        self.lambda_history = np.zeros((0, p * (k + 2)))
-        self.output_history = np.zeros((0, p * (k + 2)))
+        self.control_history = np.zeros((0, self.control_history.shape[1]))
+        self.lambda_history = np.zeros((0, self.lambda_history.shape[1]))
+        self.output_history = np.zeros((0, self.output_history.shape[1]))
 
     def step_dynamics(self, controls):
         """Given new control inputs, step the system forward in time, appending
@@ -273,7 +270,8 @@ class TwoDimensionalSystem:
         P = self.get_map_from_controls_to_gen_coordinates(state, controls)
         return P @ controls
 
-    # TODO @bibit:  think about what this should be for particle.
+    # TODO @bibit:  think about what this should be for a particle or network of
+    # particles.  Controls should probably be applied at a particle itself.
     def get_map_from_controls_to_gen_coordinates(self, state, controls):
         """Return the map P that converts the control inputs into generalized
         coordinates, i.e. u_gen = P @ tilde{u}.  In this case, we assume the
