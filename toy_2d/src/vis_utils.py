@@ -10,6 +10,7 @@ from matplotlib.patches import Polygon
 from toy_2d.src import file_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 from toy_2d.src.two_dim_spring_network import (
+    TwoDimensionalElastoPlasticNetwork,
     TwoDimensionalSpringNetwork,
     TwoDimensionalPlasticNetwork,
 )
@@ -39,6 +40,7 @@ def animation_gif_polytope(
     states,
     gif_name,
     dt,
+    hidden_states=None,
     controls=None,
     save=False,
     force_scale=1.0,
@@ -91,7 +93,40 @@ def animation_gif_polytope(
                 linewidth=2,
             )
             connectors.append(line)
+    elif type(polytope) == TwoDimensionalElastoPlasticNetwork:
+        assert (
+            hidden_states is not None
+        ), "ElastoPlasticNetwork requires hidden_states"
+        connectors = []
+        hidden_links = np.zeros(([len(polytope.params.connections), 2]))
+        for idx, (i1, i2) in enumerate(polytope.params.connections):
+            d = hidden_states[0, idx]
+            p_1_to_2 = init_corners[i2] - init_corners[i1]
+            p_1_to_2 /= np.linalg.norm(p_1_to_2)
+            hidden_link_pos = init_corners[i1] + (d * p_1_to_2)
+            hidden_links[idx] = hidden_link_pos
 
+            (slider_line,) = ax.plot(
+                [init_corners[i1, 0], hidden_link_pos[0]],
+                [init_corners[i1, 1], hidden_link_pos[1]],
+                "g--",
+                linewidth=2,
+            )
+            connectors.append(slider_line)
+            (spring_line,) = ax.plot(
+                [hidden_link_pos[0], init_corners[i2, 0]],
+                [hidden_link_pos[1], init_corners[i2, 1]],
+                "k-",
+                linewidth=1,
+            )
+            connectors.append(spring_line)
+        (hidden_dots,) = ax.plot(
+            hidden_links[:, 0],
+            hidden_links[:, 1],
+            "bo",
+            markersize=6,
+            linewidth=0,
+        )
     (corner_dots,) = ax.plot(
         init_corners[:, 0], init_corners[:, 1], "ro", markersize=8, linewidth=0
     )
@@ -138,6 +173,28 @@ def animation_gif_polytope(
                 i, j = polytope.params.connections[idx]
                 line.set_xdata([new_corners[i, 0], new_corners[j, 0]])
                 line.set_ydata([new_corners[i, 1], new_corners[j, 1]])
+        elif type(polytope) == TwoDimensionalElastoPlasticNetwork:
+            hidden_links = np.zeros(([len(polytope.params.connections), 2]))
+            for idx, (i1, i2) in enumerate(polytope.params.connections):
+                d = hidden_states[i, idx]
+                p_1_to_2 = new_corners[i2] - new_corners[i1]
+                p_1_to_2 /= np.linalg.norm(p_1_to_2)
+                hidden_link_pos = new_corners[i1] + (d * p_1_to_2)
+                hidden_links[idx] = hidden_link_pos
+
+                connectors[2 * idx].set_xdata(
+                    [new_corners[i1, 0], hidden_link_pos[0]]
+                )
+                connectors[2 * idx].set_ydata(
+                    [new_corners[i1, 1], hidden_link_pos[1]]
+                )
+                connectors[2 * idx + 1].set_xdata(
+                    [hidden_link_pos[0], new_corners[i2, 0]]
+                )
+                connectors[2 * idx + 1].set_ydata(
+                    [hidden_link_pos[1], new_corners[i2, 1]]
+                )
+            hidden_dots.set_data(hidden_links[:, 0], hidden_links[:, 1])
 
         if (controls is not None) and (i + 1 < states.shape[0]):
             # update arrow

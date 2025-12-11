@@ -11,8 +11,8 @@ from toy_2d.src import vis_utils
 from toy_2d.src.two_dim_spring_network import (
     TwoDimensionalParticleParams,
     TwoDimensionalParticle,
-    TwoDimensionalPlasticNetworkParams,
-    TwoDimensionalPlasticNetwork,
+    TwoDimensionalElastoPlasticNetworkParams,
+    TwoDimensionalElastoPlasticNetwork,
 )
 from toy_2d.src.two_dim_system import (
     TwoDimensionalSystemParams,
@@ -42,6 +42,9 @@ VX, VY = 3.0, 3.0
 x0 = np.array(
     [-0.5, VX, 1, VY, -0.5, VX, 2, VY, 0.5, VX, 1.5, VY, 1, VX, 2, VY]
 )
+# A simpler system for debugging:  two vertically stacked particles.
+# VX, VY = 0.0, 3.0
+# x0 = np.array([0, VX, 1, VY, 0, VX, 2, VY])
 states = x0.reshape(1, -1)
 
 
@@ -51,12 +54,17 @@ particle_params = TwoDimensionalParticleParams(
     mu_ground=MU_GROUND,
 )
 n_pts = x0.shape[0] // 4
-network_params = TwoDimensionalPlasticNetworkParams(
+connections = [(0, 1), (1, 2), (0, 2), (2, 3)]
+n_connections = len(connections)
+network_params = TwoDimensionalElastoPlasticNetworkParams(
     particles=[TwoDimensionalParticle(particle_params) for _ in range(n_pts)],
-    connections=[(0, 1), (1, 2), (0, 2), (2, 3)],
-    yield_forces=[50] * n_pts,
+    connections=connections,
+    spring_constants=[150] * n_connections,
+    rest_lengths=[0.5] * n_connections,
+    yield_forces=[50] * n_connections,
+    damping=[1.0] * n_connections,
 )
-network = TwoDimensionalPlasticNetwork(network_params)
+network = TwoDimensionalElastoPlasticNetwork(network_params)
 
 
 # Create a system from the network, a simulation timestep, and a control
@@ -67,14 +75,28 @@ system_params = TwoDimensionalSystemParams(
 system = TwoDimensionalSystem(system_params)
 
 
+# Compute the hidden state so the springs begin with no tension.
+hidden_state = np.zeros(len(network_params.connections))
+for i, conn in enumerate(network_params.connections):
+    p1_idx = conn[0]
+    p2_idx = conn[1]
+    p1_x = x0[4 * p1_idx]
+    p1_y = x0[4 * p1_idx + 2]
+    p2_x = x0[4 * p2_idx]
+    p2_y = x0[4 * p2_idx + 2]
+    vec_1_to_2 = np.array([p2_x - p1_x, p2_y - p1_y])
+    length_1_to_2 = np.linalg.norm(vec_1_to_2)
+    hidden_state[i] = length_1_to_2 - network_params.rest_lengths[i]
+
 # Rollout with a fixed (body-frame) force at one of the vertices.
-system.set_initial_state(x0)
+system.set_initial_state(x0, hidden_state)
 control = np.zeros(4)  # Apply no force.
 for _ in range(1200):
     system.step_dynamics(control)
 
 # Collect the state and control histories.
 states = system.state_history
+hidden_states = system.hidden_state_history
 controls = system.control_history
 control_forces, control_locs = controls[:, :2], controls[:, 2:]
 
@@ -82,8 +104,9 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 vis_utils.animation_gif_polytope(
     network,
     states,
-    "simulated_plastic_particles",
+    "simulated_elastoplastic_particles",
     DT,
+    hidden_states=hidden_states,
     controls=(control_forces, control_locs),
     save=True,
     force_scale=10.0,
@@ -94,7 +117,7 @@ config_names = []
 vis_utils.traj_plot(
     states,
     controls,
-    "simulated_plastic_particles",
+    "simulated_elastoplastic_particles",
     save=True,
     config_names=[
         f"{dir}{i}"

@@ -361,12 +361,15 @@ class TwoDimensionalPolytope:
         g = -9.81
         return np.array([0, -m * g, 0]).reshape(self.n_config, 1)
 
-    def get_k_vector(self, state):
+    def get_k_vector(self, state, _):
         """Calculate the (n_config, 1) vector of continuous forces.  This vector
         aggregates all contributions due to gravity, Coriolis, and centrifugal
         forces, and it is defined as:
 
             k = -C*v - G
+
+        The unused hidden_state argument is included for compatibility with
+        other system types that may require it.
         """
 
         C = self.get_C_matrix(state)

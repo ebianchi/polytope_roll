@@ -100,13 +100,15 @@ class TwoDimensionalParticle(TwoDimensionalPolytope):
         g = -9.81
         return np.array([0, -m * g]).reshape(self.n_config, 1)
 
-    def get_k_vector(self, state):
+    def get_k_vector(self, state, _):
         """Calculate the (n_config, 1) vector of continuous forces.  This vector
         aggregates all contributions due to gravity, Coriolis, and centrifugal
         forces, and it is defined as:
 
             k = -C*v - G
-        """
+
+        Note there is no hidden state associated with a particle, so this input
+        argument is unused."""
 
         C = self.get_C_matrix(state)
         G = self.get_G_vector(state)
@@ -149,6 +151,8 @@ class TwoDimensionalSpringNetworkParams:
             )
         for k in self.spring_constants:
             assert k >= 0, "Spring constants cannot be negative."
+        for l in self.rest_lengths:
+            assert l >= 0, "Rest lengths cannot be negative."
 
 
 class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
@@ -282,7 +286,7 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
 
         return g.reshape(self.n_config, 1)
 
-    def get_k_vector(self, state):
+    def get_k_vector(self, state, _):
         """Calculate the (n_config, 1) vector of continuous forces.  This starts
         with stacked blocks for each particle's k vector:
 
@@ -291,14 +295,16 @@ class TwoDimensionalSpringNetwork(TwoDimensionalParticle):
         Then, spring forces are added based on the connections of the spring
         network."""
         # Start with per-particle continuous forces from Coriolis/centrifugal
-        # and gravity.
+        # and gravity (pass None in as hidden state since particles have none).
         k = np.zeros((self.n_config))
         for i in range(self.n_contacts):
             particle_state = self._get_particle_state_from_system_state(
                 state, i
             )
             k[2 * i : 2 * (i + 1)] = (
-                self.params.particles[i].get_k_vector(particle_state).reshape(2)
+                self.params.particles[i]
+                .get_k_vector(particle_state, None)
+                .reshape(2)
             )
 
         # Add spring forces.
@@ -423,7 +429,7 @@ class TwoDimensionalPlasticNetwork(TwoDimensionalSpringNetwork):
         D_internal = np.zeros((n, q * l))
 
         # Iterate over each internal contact (i.e. plastic connection).
-        for i_plastic in range(self.n_plastic):
+        for i_plastic in range(q):
             conn = self.params.connections[i_plastic]
             p1_idx = conn[0]
             p2_idx = conn[1]
@@ -467,7 +473,7 @@ class TwoDimensionalPlasticNetwork(TwoDimensionalSpringNetwork):
         connection.  This is fixed and thus is not state dependent."""
         return np.array(self.params.yield_forces).reshape(self.n_plastic, 1)
 
-    def get_k_vector(self, state):
+    def get_k_vector(self, state, _):
         """Calculate the (n_config, 1) vector of continuous forces.  This is
         composed of stacked blocks for each particle's k vector:
 
@@ -481,7 +487,224 @@ class TwoDimensionalPlasticNetwork(TwoDimensionalSpringNetwork):
                 state, i
             )
             k[2 * i : 2 * (i + 1)] = (
-                self.params.particles[i].get_k_vector(particle_state).reshape(2)
+                self.params.particles[i]
+                .get_k_vector(particle_state, None)
+                .reshape(2)
             )
 
         return k.reshape(self.n_config, 1)
+
+
+@dataclass
+class TwoDimensionalElastoPlasticNetworkParams:
+    """An elastoplastic connection is hooked up in the following arrangement:
+
+    (m_1)----(plastic connection)----(spring)----(m_2)
+      |------------------(damper)------------------|
+
+    ...where the deformation d is measured from m_1 to the start of the spring,
+    across the plastic connection."""
+
+    particles: List[TwoDimensionalParticle] = field(default_factory=list)
+    connections: List[tuple] = field(default_factory=list)
+    spring_constants: List[float] = field(default_factory=list)
+    rest_lengths: List[float] = field(default_factory=list)
+    yield_forces: List[float] = field(default_factory=list)
+    damping: List[float] = field(default_factory=list)
+
+    def __post_init__(self):
+        assert len(self.particles) > 0, "There must be at least one mass."
+        assert (
+            len(self.connections)
+            == len(self.yield_forces)
+            == len(self.spring_constants)
+            == len(self.damping)
+            == len(self.rest_lengths)
+        ), (
+            "Each connection needs a spring constant, resting length, yield "
+            + "force, and damping coefficient."
+        )
+        for conn in self.connections:
+            assert (
+                conn[0] < len(self.particles)
+                and conn[1] < len(self.particles)
+                and conn[0] != conn[1]
+            ), (
+                "Connection indices must be unique pairs of valid particle "
+                + "indices."
+            )
+        for yield_force in self.yield_forces:
+            assert yield_force >= 0, "Yield forces cannot be negative."
+        for k in self.spring_constants:
+            assert k >= 0, "Spring constants cannot be negative."
+        for b in self.damping:
+            assert b >= 0, "Damping coefficients cannot be negative."
+        for l in self.rest_lengths:
+            assert l >= 0, "Rest lengths cannot be negative."
+
+
+class TwoDimensionalElastoPlasticNetwork(TwoDimensionalPlasticNetwork):
+    """A 2D network of particles connected by elastoplastic connections.
+    These connections behave like springs up to a yield force, after which
+    they deform plastically.  These connections also have damping in parallel to
+    prevent excessive acceleration after yielding.
+
+    Impose the same state structure as for the spring network:
+        state = [x1, x1_dot, y1, y1_dot, ... xn, xn_dot, yn, yn_dot]
+
+    With an additional hidden state structure:
+        hidden_state = [d1, d2, ..., dl]
+
+    The hidden state is a list of the plastic deformations for each
+    elastoplastic connection.  The deformations do not need derivatives.
+    """
+
+    params: TwoDimensionalElastoPlasticNetworkParams
+
+    # TODO @bibit:  Drafted, need to test.
+    def get_D_internal_matrix(self, state):
+        """Calculate the tangential contact jacobian for all internal plastic
+        connections.  Only one particle in a particle-particle elastoplastic
+        connection is acted on by the plastic force.  Returns a numpy array of
+        size (n_config, n_plastic * n_internal_friction)."""
+        # The resulting matrix will be of size (n_config, n_contacts * n_projs).
+        n = self.n_config
+        q = self.n_plastic
+        l = self.n_internal_friction
+
+        # Initialize to all zeros.
+        D_internal = np.zeros((n, q * l))
+
+        # Iterate over each internal contact (i.e. plastic connection).
+        for i_plastic in range(self.n_plastic):
+            conn = self.params.connections[i_plastic]
+            p1_idx = conn[0]
+            p2_idx = conn[1]
+
+            # Define tangential direction vectors based on particle locations.
+            p1 = self._get_particle_state_from_system_state(state, p1_idx)[
+                [0, 2]
+            ]
+            p2 = self._get_particle_state_from_system_state(state, p2_idx)[
+                [0, 2]
+            ]
+            unit_1_to_2 = p2 - p1
+            unit_1_to_2 /= np.linalg.norm(unit_1_to_2)
+            tangential_dirs = np.vstack((unit_1_to_2, -unit_1_to_2))
+
+            # Get the contact jacobian for the first particle in the connection,
+            # as the internal force only acts on that particle.
+            J_p1 = self.d_pdot_d_qdot_jac_func(p1_idx)
+
+            # Fill in the appropriate blocks of D_internal.
+            D_internal[:, i_plastic * l : (i_plastic + 1) * l] = (
+                tangential_dirs @ -J_p1
+            ).T
+
+        return D_internal
+
+    def get_D_plastic_matrix(self, state):
+        return TwoDimensionalPlasticNetwork.get_D_internal_matrix(self, state)
+
+    # TODO @bibit:  This depends on the hidden state.  Need to pass that in.
+    def get_k_vector(self, state, hidden_state):
+        """Calculate the (n_config, 1) vector of continuous forces.  This is
+        composed of stacked blocks for each particle's k vector:
+
+            k_particle = -C*v - G
+
+        Then spring forces are added to particle 2 of an elastoplastic
+        connection."""
+        k = np.zeros((self.n_config))
+        for i in range(self.n_contacts):
+            particle_state = self._get_particle_state_from_system_state(
+                state, i
+            )
+            k[2 * i : 2 * (i + 1)] = (
+                self.params.particles[i]
+                .get_k_vector(particle_state, None)
+                .reshape(2)
+            )
+
+        # Add spring and damping forces.
+        for i_elastoplastic in range(len(self.params.connections)):
+            conn = self.params.connections[i_elastoplastic]
+            p1_idx = conn[0]
+            p2_idx = conn[1]
+            k_spring = self.params.spring_constants[i_elastoplastic]
+            rest_length = self.params.rest_lengths[i_elastoplastic]
+            b_damping = self.params.damping[i_elastoplastic]
+
+            # Get particle positions and velocities.
+            p1 = self._get_particle_state_from_system_state(state, p1_idx)[
+                [0, 2]
+            ]
+            p2 = self._get_particle_state_from_system_state(state, p2_idx)[
+                [0, 2]
+            ]
+            v1 = self._get_particle_state_from_system_state(state, p1_idx)[
+                [1, 3]
+            ]
+            v2 = self._get_particle_state_from_system_state(state, p2_idx)[
+                [1, 3]
+            ]
+
+            unit_1_to_2 = p2 - p1
+            unit_1_to_2 /= np.linalg.norm(unit_1_to_2)
+
+            # Compute the directional spring force acting on particle 2.  This
+            # value depends on the hidden deformation state.
+            d = hidden_state[i_elastoplastic].item()
+            f_on_1 = k_spring * (p2 - p1 - (rest_length + d) * unit_1_to_2)
+
+            # Apply spring forces to the second particle's k vector.
+            k[2 * p2_idx : 2 * (p2_idx + 1)] -= f_on_1
+
+            # Compute the damping force acting on both particles.
+            f_damping_mag = b_damping * (v2 - v1) @ unit_1_to_2
+
+            k[2 * p1_idx : 2 * (p1_idx + 1)] += f_damping_mag * unit_1_to_2
+            k[2 * p2_idx : 2 * (p2_idx + 1)] -= f_damping_mag * unit_1_to_2
+
+        return k.reshape(self.n_config, 1)
+
+    # TODO @bibit:  implement
+    def get_sliding_speed_adjustments(self, state, hidden_state):
+        q = self.n_plastic
+        l = self.n_internal_friction
+
+        mat_adj = np.zeros((q * l, q * l))
+        vec_adj = np.zeros((q * l, 1))
+
+        for i_elastoplastic in range(len(self.params.connections)):
+            conn = self.params.connections[i_elastoplastic]
+            p1_idx = conn[0]
+            p2_idx = conn[1]
+            k_spring = self.params.spring_constants[i_elastoplastic]
+            rest_length = self.params.rest_lengths[i_elastoplastic]
+            d = hidden_state[i_elastoplastic].item()
+
+            # Matrix adjustment.
+            mat_adj[
+                i_elastoplastic * l : (i_elastoplastic + 1) * l,
+                i_elastoplastic * l : (i_elastoplastic + 1) * l,
+            ] = (1 / k_spring) * np.array([[1, -1], [-1, 1]])
+
+            # Get particle positions.
+            p1 = self._get_particle_state_from_system_state(state, p1_idx)[
+                [0, 2]
+            ]
+            p2 = self._get_particle_state_from_system_state(state, p2_idx)[
+                [0, 2]
+            ]
+
+            unit_1_to_2 = p2 - p1
+            unit_1_to_2 /= np.linalg.norm(unit_1_to_2)
+            tangential_dirs = np.vstack((unit_1_to_2, -unit_1_to_2))
+
+            # Vector adjustment.
+            vec_adj[i_elastoplastic * l : (i_elastoplastic + 1) * l, 0] = (
+                tangential_dirs @ (p2 - p1 - (rest_length + d) * unit_1_to_2)
+            )
+
+        return mat_adj, vec_adj

@@ -10,6 +10,7 @@ import numpy as np
 from toy_2d.src import solver_utils
 from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
 from toy_2d.src.two_dim_spring_network import (
+    TwoDimensionalElastoPlasticNetwork,
     TwoDimensionalParticle,
     TwoDimensionalPlasticNetwork,
     TwoDimensionalSpringNetwork,
@@ -63,14 +64,23 @@ class TwoDimensionalSystem:
         n_x = 2 * self.params.polytope.n_config
         p = self.params.polytope.n_contacts
         k = self.params.polytope.n_friction
+        n_hidden = (
+            0
+            if type(self.params.polytope) != TwoDimensionalElastoPlasticNetwork
+            else self.params.polytope.n_plastic
+        )
 
         # Initialize histories to be empty.
         self.state_history = np.zeros((0, n_x))
         self.control_history = np.zeros((0, 4))
         self.lambda_history = np.zeros((0, p * (k + 2)))
         self.output_history = np.zeros((0, p * (k + 2)))
+        self.hidden_state_history = np.zeros((0, n_hidden))
 
-        if type(self.params.polytope) == TwoDimensionalPlasticNetwork:
+        if type(self.params.polytope) in [
+            TwoDimensionalPlasticNetwork,
+            TwoDimensionalElastoPlasticNetwork,
+        ]:
             # There are more lambda and output variables to keep track of for
             # plastic networks.
             q = self.params.polytope.n_plastic
@@ -85,11 +95,13 @@ class TwoDimensionalSystem:
         control_len = self.control_history.shape[0]
         lam_len = self.lambda_history.shape[0]
         out_len = self.output_history.shape[0]
+        hidden_len = self.hidden_state_history.shape[0]
 
         if state_len == 0:
-            assert control_len == lam_len == out_len == 0
+            assert control_len == lam_len == out_len == hidden_len == 0
 
         else:
+            assert state_len == hidden_len
             assert state_len - control_len == 1
             assert control_len == lam_len == out_len
 
@@ -135,7 +147,7 @@ class TwoDimensionalSystem:
 
         return next_state
 
-    def get_simulation_terms(self, state, controls):
+    def get_simulation_terms(self, state, controls, hidden_state):
         """Make one helper function to calculate all of the simulation-related
         terms of a system at the state."""
 
@@ -163,7 +175,7 @@ class TwoDimensionalSystem:
             state_for_k[2 * i + 1] = v0[i, 0]
 
         M = polytope.get_M_matrix(state_for_M)
-        k = polytope.get_k_vector(state_for_k)
+        k = polytope.get_k_vector(state_for_k, hidden_state)
 
         u = self.convert_input_to_generalized_coords(state, controls)
         u = u.reshape((n_q, 1))
@@ -176,7 +188,7 @@ class TwoDimensionalSystem:
 
         return M, D, N, E, Mu, k, u, q0, v0, phi
 
-    def set_initial_state(self, state):
+    def set_initial_state(self, state, hidden_state=None):
         """Set the initial state of the system.  This method will automatically
         clear out the state, control, and contact force histories of the system
         and set the initial state to that provided as an argument."""
@@ -191,6 +203,12 @@ class TwoDimensionalSystem:
         self.lambda_history = np.zeros((0, self.lambda_history.shape[1]))
         self.output_history = np.zeros((0, self.output_history.shape[1]))
 
+        if self.hidden_state_history.shape[1] > 0:
+            assert hidden_state is not None
+            self.hidden_state_history = hidden_state.reshape(1, -1)
+        else:
+            self.hidden_state_history = np.zeros((1, 0))
+
     def step_dynamics(self, controls):
         """Given new control inputs, step the system forward in time, appending
         the next state and provided controls to the end of the state and control
@@ -201,7 +219,10 @@ class TwoDimensionalSystem:
 
         # Get the current state and step the dynamics.
         state = self.state_history[-1, :]
-        next_state, lam, out = self._step_dynamics(state, controls)
+        hidden_state = self.hidden_state_history[-1, :]
+        next_state, lam, out, hidden = self._step_dynamics(
+            state, controls, hidden_state
+        )
 
         # Get the controls in the full [fx, fy, loc_x, loc_y] format.
         full_controls = self.get_full_controls(state, controls)
@@ -211,15 +232,19 @@ class TwoDimensionalSystem:
         self.control_history = np.vstack((self.control_history, full_controls))
         self.lambda_history = np.vstack((self.lambda_history, lam))
         self.output_history = np.vstack((self.output_history, out))
+        self.hidden_state_history = np.vstack(
+            (self.hidden_state_history, hidden)
+        )
 
-    def _step_dynamics(self, state, controls):
+    def _step_dynamics(self, state, controls, hidden_state):
         """Given the current state and controls (given as (4,) array for
         [force_x, force_y, world_loc_x, world_loc_y]), simulate the system one
         timestep into the future.  This function necessarily determines the
         ground reaction forces.  This function does NOT check that the provided
         control_force and control_loc are valid (i.e. within friction cone and
         acting on the surface of the object).  Returns the next state,
-        complementarity lambda vector, and the LCP output vector."""
+        complementarity lambda vector, the LCP output vector, and the new hidden
+        state for the system."""
 
         polytope = self.params.polytope
         dt = self.params.dt
@@ -228,7 +253,7 @@ class TwoDimensionalSystem:
 
         # Construct LCP terms.
         M, D, N, E, Mu, k, u, q0, v0, phi = self.get_simulation_terms(
-            state, controls
+            state, controls, hidden_state
         )
         M_i = np.linalg.inv(M)
 
@@ -244,7 +269,10 @@ class TwoDimensionalSystem:
         vec_bot = np.zeros((p, 1))
 
         # Incorporate any internal plastic forces.
-        if type(polytope) == TwoDimensionalPlasticNetwork:
+        if type(polytope) in [
+            TwoDimensionalPlasticNetwork,
+            TwoDimensionalElastoPlasticNetwork,
+        ]:
             q_plastic = polytope.n_plastic
             l = polytope.n_internal_friction
 
@@ -265,15 +293,27 @@ class TwoDimensionalSystem:
             )
             mat_bot = np.hstack((mat_bot, np.zeros((p, q_plastic * (l + 1)))))
 
+            # Elastoplastic networks have different form for the plastic force/
+            # sliding speed complementarity.
+            if type(polytope) == TwoDimensionalElastoPlasticNetwork:
+                D_comp = polytope.get_D_plastic_matrix(state)
+                mat_adj, vec_adj = polytope.get_sliding_speed_adjustments(
+                    state, hidden_state
+                )
+            else:
+                D_comp = D_internal
+                mat_adj = np.zeros((q_plastic * l, q_plastic * l))
+                vec_adj = np.zeros((q_plastic * l, 1))
+
             # Combine external force portion as "top" so "mid" and "bot" can
             # become the internal force sliding magnitude and yield constraints.
             mat_top = np.vstack((mat_top, mat_mid, mat_bot))
             mat_mid = np.hstack(
                 (
-                    D_internal.T @ M_i @ D,
-                    D_internal.T @ M_i @ N,
+                    D_comp.T @ M_i @ D,
+                    D_comp.T @ M_i @ N,
                     np.zeros((q_plastic * l, p)),
-                    D_internal.T @ M_i @ D_internal,
+                    D_comp.T @ M_i @ D_internal + 1 / dt**2 * mat_adj,
                     E_internal,
                 )
             )
@@ -286,7 +326,7 @@ class TwoDimensionalSystem:
             )
 
             vec_top = np.vstack((vec_top, vec_mid, vec_bot))
-            vec_mid = D_internal.T @ (v0 + dt * M_i @ (k + u))
+            vec_mid = D_comp.T @ (v0 + dt * M_i @ (k + u)) + 1 / dt * vec_adj
             vec_bot = dt * f_yield
 
         lcp_mat = np.vstack((mat_top, mat_mid, mat_bot))
@@ -301,7 +341,10 @@ class TwoDimensionalSystem:
         v_next = v0 + M_i @ (N @ Cn + D @ Beta + dt * (k + u))
 
         # If there are plastic forces, incorporate into the forward dynamics.
-        if type(polytope) == TwoDimensionalPlasticNetwork:
+        if type(polytope) in [
+            TwoDimensionalPlasticNetwork,
+            TwoDimensionalElastoPlasticNetwork,
+        ]:
             sigma = lcp_sol[
                 p * (k_friction + 2) : p * (k_friction + 2) + q_plastic * l
             ].reshape(q_plastic * l, 1)
@@ -317,11 +360,22 @@ class TwoDimensionalSystem:
             next_state[2 * i] = q_next[i]
             next_state[2 * i + 1] = v_next[i]
 
-        # Return the next state, lambda, and outputs.
+        next_hidden_state = np.zeros(0)
+        if type(polytope) == TwoDimensionalElastoPlasticNetwork:
+            # Propagate d using d + dt*ddot where ddot comes from the
+            # complementarity expression.
+            rel_sliding_speeds = (
+                D_comp.T @ v_next
+                + (1 / dt**2 * mat_adj @ sigma).squeeze()
+                + (1 / dt * vec_adj).squeeze()
+            )
+            next_hidden_state = hidden_state + dt * rel_sliding_speeds[0::2]
+
+        # Return the next state, lambda, outputs, and next hidden state.
         lam = lcp_sol.squeeze()
         output = lcp_mat @ lam + lcp_vec.squeeze()
 
-        return next_state, lam, output
+        return next_state, lam, output, next_hidden_state
 
     def convert_input_to_generalized_coords(self, state, controls):
         """Convert an input force and location to forces in the generalized
@@ -372,6 +426,7 @@ class TwoDimensionalSystem:
         elif type(self.params.polytope) in [
             TwoDimensionalSpringNetwork,
             TwoDimensionalPlasticNetwork,
+            TwoDimensionalElastoPlasticNetwork,
         ]:
             P = np.array(
                 [
