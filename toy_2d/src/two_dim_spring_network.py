@@ -419,7 +419,11 @@ class TwoDimensionalPlasticNetwork(TwoDimensionalSpringNetwork):
     def get_D_internal_matrix(self, state):
         """Calculate the tangential contact jacobian for all internal particle-
         particle plastic connections. Returns a numpy array of size (n_config,
-        n_plastic * n_internal_friction)."""
+        n_plastic * n_internal_friction).
+
+        This matrix is constructed such that sigma_1 moves particle 1 in the
+        \hat{t}_1 direction.  This means D_internal.T @ v yields [-ddot_1,
+        ddot_1, ... -ddot_q, ddot_q]."""
         # The resulting matrix will be of size (n_config, n_contacts * n_projs).
         n = self.n_config
         q = self.n_plastic
@@ -452,7 +456,7 @@ class TwoDimensionalPlasticNetwork(TwoDimensionalSpringNetwork):
 
             # Fill in the appropriate blocks of D_internal.
             D_internal[:, i_plastic * l : (i_plastic + 1) * l] = (
-                tangential_dirs @ (J_p2 - J_p1)
+                tangential_dirs @ (J_p1 - J_p2)
             ).T
 
         return D_internal
@@ -561,12 +565,17 @@ class TwoDimensionalElastoPlasticNetwork(TwoDimensionalPlasticNetwork):
 
     params: TwoDimensionalElastoPlasticNetworkParams
 
-    # TODO @bibit:  Drafted, need to test.
     def get_D_internal_matrix(self, state):
         """Calculate the tangential contact jacobian for all internal plastic
         connections.  Only one particle in a particle-particle elastoplastic
         connection is acted on by the plastic force.  Returns a numpy array of
-        size (n_config, n_plastic * n_internal_friction)."""
+        size (n_config, n_plastic * n_internal_friction).
+
+        This matrix is constructed such that sigma_1 moves particle 1 in the
+        \hat{t}_1 direction, to match the convention of
+        TwoDimensionalPlasticNetwork.  This compatibility is required for
+        simulation since the plastic D_internal is used for expressing the
+        right complementarity expression for the elastoplastic network."""
         # The resulting matrix will be of size (n_config, n_contacts * n_projs).
         n = self.n_config
         q = self.n_plastic
@@ -598,15 +607,11 @@ class TwoDimensionalElastoPlasticNetwork(TwoDimensionalPlasticNetwork):
 
             # Fill in the appropriate blocks of D_internal.
             D_internal[:, i_plastic * l : (i_plastic + 1) * l] = (
-                tangential_dirs @ -J_p1
+                tangential_dirs @ J_p1
             ).T
 
         return D_internal
 
-    def get_D_plastic_matrix(self, state):
-        return TwoDimensionalPlasticNetwork.get_D_internal_matrix(self, state)
-
-    # TODO @bibit:  This depends on the hidden state.  Need to pass that in.
     def get_k_vector(self, state, hidden_state):
         """Calculate the (n_config, 1) vector of continuous forces.  This is
         composed of stacked blocks for each particle's k vector:
@@ -668,8 +673,24 @@ class TwoDimensionalElastoPlasticNetwork(TwoDimensionalPlasticNetwork):
 
         return k.reshape(self.n_config, 1)
 
-    # TODO @bibit:  implement
+    def get_D_plastic_matrix(self, state):
+        """To get a proper expression for \dot{d}, the pure plastic system's
+        tangential contact Jacobian can be reused, in addition to some
+        additional correction terms to account for the elasticity and hidden
+        state."""
+        return TwoDimensionalPlasticNetwork.get_D_internal_matrix(self, state)
+
     def get_sliding_speed_adjustments(self, state, hidden_state):
+        """For the complementarity expression indicating the internal plastic
+        resistance force opposes direction of relative motion, adjustments to
+        the D_internal.T @ v' term are needed to account for the hidden state.
+        These adjustments come in the form of a matrix and vector such that:
+
+            D_internal.T @ v'  -->
+            D_plastic.T @ v'  +  (1/dt^2) * mat_adj @ sigma  +  (1/dt) vec_adj
+
+        This method returns mat_adj and vec_adj for a given state and hidden
+        state."""
         q = self.n_plastic
         l = self.n_internal_friction
 
@@ -703,7 +724,7 @@ class TwoDimensionalElastoPlasticNetwork(TwoDimensionalPlasticNetwork):
             tangential_dirs = np.vstack((unit_1_to_2, -unit_1_to_2))
 
             # Vector adjustment.
-            vec_adj[i_elastoplastic * l : (i_elastoplastic + 1) * l, 0] = (
+            vec_adj[i_elastoplastic * l : (i_elastoplastic + 1) * l, 0] = -1 * (
                 tangential_dirs @ (p2 - p1 - (rest_length + d) * unit_1_to_2)
             )
 

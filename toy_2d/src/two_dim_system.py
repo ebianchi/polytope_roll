@@ -369,7 +369,9 @@ class TwoDimensionalSystem:
                 + (1 / dt**2 * mat_adj @ sigma).squeeze()
                 + (1 / dt * vec_adj).squeeze()
             )
-            next_hidden_state = hidden_state + dt * rel_sliding_speeds[0::2]
+            # The relative sliding speeds are stacked as [-ddot_1, ddot_1, ...,
+            # -ddot_q, ddot_q], so extract the positive sliding speed entries.
+            next_hidden_state = hidden_state + dt * rel_sliding_speeds[1::2]
 
         # Return the next state, lambda, outputs, and next hidden state.
         lam = lcp_sol.squeeze()
