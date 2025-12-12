@@ -62,7 +62,7 @@ def animation_gif_polytope(
     plt.ylim(-1, max(ys) + 4)
     ax.set_aspect("equal", "box")
 
-    # Plot the ground, polytope, and corners.
+    # Plot the ground, polytope, corners, and text box for annotating the time.
     ground = plt.fill_between(
         x=np.arange(min(xs) - 5, max(xs) + 5, 1),
         y1=0,
@@ -74,6 +74,7 @@ def animation_gif_polytope(
     init_corners = polytope.get_vertex_locations_world(
         init_state, for_visualization=True
     )
+    time_text = ax.text(0.02, 0.95, "", transform=ax.transAxes)
 
     # Draw the underlying connections.
     if type(polytope) == TwoDimensionalPolytope:
@@ -154,7 +155,7 @@ def animation_gif_polytope(
 
     filename = f"{file_utils.TEMP_DIR}/0.png"
     plt.savefig(filename)
-    filenames = [filename]
+    filenames = []  # Exclude first frame from the gif.
 
     for i in range(states.shape[0]):
         new_state = states[i, :]
@@ -162,6 +163,7 @@ def animation_gif_polytope(
             new_state, for_visualization=True
         )
         corner_dots.set_data((new_corners[:, 0], new_corners[:, 1]))
+        time_text.set_text(f"Time: {i * dt * step:.2f} s")
 
         if type(polytope) == TwoDimensionalPolytope:
             poly.set(xy=new_corners)
@@ -170,9 +172,9 @@ def animation_gif_polytope(
             TwoDimensionalPlasticNetwork,
         ]:
             for idx, (line) in enumerate(connectors):
-                i, j = polytope.params.connections[idx]
-                line.set_xdata([new_corners[i, 0], new_corners[j, 0]])
-                line.set_ydata([new_corners[i, 1], new_corners[j, 1]])
+                j, k = polytope.params.connections[idx]
+                line.set_xdata([new_corners[j, 0], new_corners[k, 0]])
+                line.set_ydata([new_corners[j, 1], new_corners[k, 1]])
         elif type(polytope) == TwoDimensionalElastoPlasticNetwork:
             hidden_links = np.zeros(([len(polytope.params.connections), 2]))
             for idx, (i1, i2) in enumerate(polytope.params.connections):
@@ -238,14 +240,18 @@ def traj_plot(
     states,
     controls,
     plot_name,
+    dt,
+    hidden_states=None,
     save=False,
     costs=None,
     times=None,
     title="",
     config_names=None,
+    config_and_vel_only=False,
 ):
     configs = states[:, ::2]
     velocities = states[:, 1::2]
+    ts = np.arange(states.shape[0]) * dt
 
     fx, fy = controls[:, 0], controls[:, 1]
     force_mag = np.linalg.norm(controls[:, :2], axis=1)
@@ -253,49 +259,76 @@ def traj_plot(
     plt.ion()
     fig = plt.figure(figsize=(8, 8))
 
-    ax1 = fig.add_subplot(321)
+    num = (
+        211
+        if config_and_vel_only and hidden_states is None
+        else 311 if config_and_vel_only else 321
+    )
+    ax1 = fig.add_subplot(num)
     for i in range(configs.shape[1]):
         label = config_names[i] if config_names is not None else f"q_{i}"
-        ax1.plot(configs[:, i], label=label)
+        ax1.plot(ts, configs[:, i], label=label)
     ax1.set_ylabel("Meters or Radians")
     ax1.legend()
 
-    ax2 = fig.add_subplot(323)
+    num = (
+        212
+        if config_and_vel_only and hidden_states is None
+        else 312 if config_and_vel_only else 321
+    )
+    ax2 = fig.add_subplot(num)
     for i in range(configs.shape[1]):
         label = f"v_{config_names[i]}" if config_names is not None else f"v_{i}"
-        ax2.plot(velocities[:, i], label=label)
+        ax2.plot(ts, velocities[:, i], label=label)
     ax2.set_ylabel("Velocity")
     ax2.legend()
+    if hidden_states is None and not config_and_vel_only:
+        ax2.set_xlabel("Time [s]")
 
-    ax3 = fig.add_subplot(325)
-    ax3.plot(fx, label="f_x")
-    ax3.plot(fy, label="f_y")
-    ax3.plot(force_mag, linewidth=3, alpha=0.4, label="force_mag")
-    ax3.set_ylabel("Force")
-    ax3.legend()
-    ax3.set_xlabel("Timesteps")
+    if config_and_vel_only and hidden_states is not None:
+        ax3 = fig.add_subplot(313)
+        for i in range(hidden_states.shape[1]):
+            ax3.plot(ts, hidden_states[:, i], label=f"d_{i}")
+        ax3.set_ylabel("Hidden Plastic Deformations [m]")
+        ax3.legend()
+        ax3.set_xlabel("Time [s]")
 
-    if costs is not None:
-        ax4 = fig.add_subplot(322)
-        ax4.plot(costs)
-        ax4.set_ylabel("Optimization Cost")
-        ax4.yaxis.set_label_position("right")
-        ax4.yaxis.tick_right()
-        ax4.set_yscale("log")
+    if not config_and_vel_only:
+        ax3 = fig.add_subplot(325)
+        ax3.plot(ts[: fx.shape[0]], fx, label="f_x")
+        ax3.plot(ts[: fy.shape[0]], fy, label="f_y")
+        ax3.plot(
+            ts[: force_mag.shape[0]],
+            force_mag,
+            linewidth=3,
+            alpha=0.4,
+            label="force_mag",
+        )
+        ax3.set_ylabel("Force")
+        ax3.legend()
+        ax3.set_xlabel("Time [s]")
 
-    if times is not None:
-        total_time = sum(times)
+        if costs is not None:
+            ax4 = fig.add_subplot(322)
+            ax4.plot(costs)
+            ax4.set_ylabel("Optimization Cost")
+            ax4.yaxis.set_label_position("right")
+            ax4.yaxis.tick_right()
+            ax4.set_yscale("log")
 
-        ax5 = fig.add_subplot(324)
-        ax5.plot(times, label=f"Total Time: {total_time:.2f}s")
-        ax5.set_ylabel("Loop Time (seconds)")
-        ax5.yaxis.set_label_position("right")
-        ax5.yaxis.tick_right()
-        ax5.set_yscale("log")
-        ax5.set_ylim(3e-2, 2e0)
-        ax5.grid(which="both", axis="y")
-        ax5.legend()
-        ax5.set_xlabel("Loops")
+        if times is not None:
+            total_time = sum(times)
+
+            ax5 = fig.add_subplot(324)
+            ax5.plot(times, label=f"Total Time: {total_time:.2f}s")
+            ax5.set_ylabel("Loop Time (seconds)")
+            ax5.yaxis.set_label_position("right")
+            ax5.yaxis.tick_right()
+            ax5.set_yscale("log")
+            ax5.set_ylim(3e-2, 2e0)
+            ax5.grid(which="both", axis="y")
+            ax5.legend()
+            ax5.set_xlabel("Loops")
 
     fig.suptitle(title)
 

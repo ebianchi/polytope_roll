@@ -27,7 +27,7 @@ CONTACT_ANGLE = 0.0
 
 # Particle properties
 MASS = 1
-MU_GROUND = 0.1
+MU_GROUND = 0.2
 
 # Control properties
 MU_CONTROL = 0.5  # Currently, this isn't being used.  The ambition is for
@@ -39,9 +39,7 @@ DT = 0.002  # If a generated trajectory looks messed up, it could be
 
 # Initial conditions, in order of x, dx, y, dy for 1 particle, then next, etc.
 VX, VY = 3.0, 3.0
-x0 = np.array(
-    [-0.5, VX, 1, VY, -0.5, VX, 2, VY, 0.5, VX, 1.5, VY, 1, VX, 2, VY]
-)
+x0 = np.array([0, VX, 1, VY, 0, VX, 2, VY, 1, VX, 1.5, VY, 1, VX, 2.5, VY])
 states = x0.reshape(1, -1)
 
 
@@ -89,18 +87,36 @@ vis_utils.animation_gif_polytope(
     force_scale=10.0,
 )
 
+# For plotting purposes, compute plastic deformations from the states and pass
+# them into the trajectory plotting as "hidden states".
+deformations = np.zeros((states.shape[0], len(network_params.connections)))
+for i in range(states.shape[0]):
+    state = states[i, :]
+    for j, conn in enumerate(network_params.connections):
+        p1_idx = conn[0]
+        p2_idx = conn[1]
+        d = np.linalg.norm(
+            state[4 * p2_idx : 4 * p2_idx + 3 : 2]
+            - state[4 * p1_idx : 4 * p1_idx + 3 : 2]
+        )
+        deformations[i, j] = d
+
 # Generate a plot of the simulated rollout.
 config_names = []
 vis_utils.traj_plot(
     states,
     controls,
     "simulated_plastic_particles",
+    DT,
+    hidden_states=deformations,
     save=True,
     config_names=[
         f"{dir}{i}"
         for i in range(len(network_params.particles))
         for dir in ["x", "y"]
     ],
+    title="Plastic Particle Network Simulation",
+    config_and_vel_only=True,
 )
 
 breakpoint()

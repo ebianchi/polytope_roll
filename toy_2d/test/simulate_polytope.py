@@ -84,7 +84,7 @@ control_forces, control_locs = controls[:, :2], controls[:, 2:]
 breakpoint()
 
 # Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, "simulated_traj", save=True)
+vis_utils.traj_plot(states, controls, "simulated_traj", DT, save=True)
 
 # Generate a gif of the simulated rollout.
 vis_utils.animation_gif_polytope(

@@ -79,7 +79,12 @@ vis_utils.animation_gif_polytope(
 
 # Generate a plot of the simulated rollout.
 vis_utils.traj_plot(
-    states, controls, "simulated_particle", save=False, config_names=["x", "y"]
+    states,
+    controls,
+    "simulated_particle",
+    DT,
+    save=False,
+    config_names=["x", "y"],
 )
 
 breakpoint()

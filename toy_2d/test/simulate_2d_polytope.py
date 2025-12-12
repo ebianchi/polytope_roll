@@ -88,6 +88,6 @@ vis_utils.animation_gif_polytope(
 )
 
 # Generate a plot of the simulated rollout.
-vis_utils.traj_plot(states, controls, "simulated_2d_traj", save=False)
+vis_utils.traj_plot(states, controls, "simulated_2d_traj", DT, save=False)
 
 breakpoint()

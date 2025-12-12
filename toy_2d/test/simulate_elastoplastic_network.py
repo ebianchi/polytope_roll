@@ -27,7 +27,7 @@ CONTACT_ANGLE = 0.0
 
 # Particle properties
 MASS = 1
-MU_GROUND = 0.1
+MU_GROUND = 0.2
 
 # Control properties
 MU_CONTROL = 0.5  # Currently, this isn't being used.  The ambition is for
@@ -39,9 +39,7 @@ DT = 0.002  # If a generated trajectory looks messed up, it could be
 
 # Initial conditions, in order of x, dx, y, dy for 1 particle, then next, etc.
 VX, VY = 3.0, 3.0
-x0 = np.array(
-    [-0.5, VX, 1, VY, -0.5, VX, 2, VY, 0.5, VX, 1.5, VY, 1, VX, 2, VY]
-)
+x0 = np.array([0, VX, 1, VY, 0, VX, 2, VY, 1, VX, 1.5, VY, 1, VX, 2.5, VY])
 # A simpler system for debugging:  two vertically stacked particles.
 # VX, VY = 0.0, 3.0
 # x0 = np.array([0, VX, 1, VY, 0, VX, 2, VY])
@@ -118,12 +116,16 @@ vis_utils.traj_plot(
     states,
     controls,
     "simulated_elastoplastic_particles",
+    DT,
+    hidden_states=hidden_states,
     save=True,
     config_names=[
         f"{dir}{i}"
         for i in range(len(network_params.particles))
         for dir in ["x", "y"]
     ],
+    title="Elastoplastic Particle Network Simulation",
+    config_and_vel_only=True,
 )
 
 breakpoint()

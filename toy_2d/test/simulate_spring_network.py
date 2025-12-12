@@ -93,6 +93,7 @@ vis_utils.traj_plot(
     states,
     controls,
     "simulated_particles",
+    DT,
     save=False,
     config_names=[
         f"{dir}{i}"
