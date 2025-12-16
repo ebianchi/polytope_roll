@@ -225,7 +225,7 @@ def animation_gif_polytope(
                 writer.append_data(image)
         fps = 1.0 / dt
         gif = convert_to_rgb(imageio.mimread(gif_file))
-        imageio.mimsave(gif_file, gif, fps=fps)
+        imageio.mimsave(gif_file, gif, fps=fps, loop=0)
 
         print(f"Saved gif at {gif_file}")
 
