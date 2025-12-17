@@ -30,22 +30,17 @@ Another option is the following (non-convex) formulation:
                     x_0 = x(0)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from copy import deepcopy
 
 import numpy as np
-import scipy.sparse as sp
 import timeit
 
 import gurobipy as gp
 from gurobipy import GRB
 
-from toy_2d.src import file_utils
 from toy_2d.src import vis_utils
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytope
-from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams
-from toy_2d.src.two_dim_system import TwoDSystemForceOnly, TwoDimensionalSystem
-from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
+from toy_2d.src.two_dim_system import TwoDimensionalSystem
 from toy_2d.src.two_dim_lcs_approximation import TwoDSystemLCSApproximation
 
 
@@ -474,6 +469,7 @@ class TwoDTrajectoryOptimization:
             states,
             controls,
             file_title,
+            dt_sim,
             save=save,
             costs=costs,
             times=times,

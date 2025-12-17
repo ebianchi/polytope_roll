@@ -274,7 +274,7 @@ def traj_plot(
     num = (
         212
         if config_and_vel_only and hidden_states is None
-        else 312 if config_and_vel_only else 321
+        else 312 if config_and_vel_only else 323
     )
     ax2 = fig.add_subplot(num)
     for i in range(configs.shape[1]):

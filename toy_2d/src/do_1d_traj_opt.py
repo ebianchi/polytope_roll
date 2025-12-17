@@ -33,7 +33,7 @@ INPUT_LIMIT = 5.0
 LOOKAHEAD = 3
 USE_BIG_M = False
 USE_NON_CONVEX = not USE_BIG_M
-SAVE_OUTPUT = False
+SAVE_OUTPUT = True
 
 # Contact location and direction.
 CONTACT_LOC = np.array([-1, 1])
@@ -265,6 +265,7 @@ vis_utils.traj_plot(
     states,
     controls,
     file_title,
+    DT_SIM,
     save=SAVE_OUTPUT,
     costs=costs,
     times=times,

@@ -14,7 +14,6 @@ from toy_2d.src.two_dim_polytope import TwoDimensionalPolytopeParams
 from toy_2d.src.two_dim_system import TwoDSystemForceOnly
 from toy_2d.src.two_dim_system import TwoDimensionalSystemParams
 from toy_2d.src.two_dim_traj_opt import (
-    TrajectoryOptimizationReport,
     TwoDTrajectoryOptimizationParams,
     TwoDTrajectoryOptimization,
 )
@@ -34,7 +33,7 @@ USE_NON_CONVEX = not USE_BIG_M
 SCENARIOS = {1: "Angular Error", 2: "Position Error Only", 3: "Minimum Slip"}
 SCENARIOS_SHORT = {1: "ang_err", 2: "pos_err_only", 3: "min_slip"}
 SCENARIO = 3
-SAVE_OUTPUT = False
+SAVE_OUTPUT = True
 
 # Based on the above settings, generate informative plot titles and file names.
 blurb = SCENARIOS[SCENARIO]

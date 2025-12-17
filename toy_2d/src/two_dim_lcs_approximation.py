@@ -121,9 +121,7 @@ class TwoDSystemLCSApproximation:
         # Need the mass matrix and continuous forces.
         M = polytope.get_M_matrix(state_sys)
         M_inv = np.linalg.inv(M)
-        k = polytope.get_k_vector(state_sys).reshape(
-            3,
-        )
+        k = polytope.get_k_vector(state_sys, None).reshape(3)
 
         # Build the expression.
         mat_1 = np.vstack(
@@ -187,9 +185,7 @@ class TwoDSystemLCSApproximation:
         M_inv = np.linalg.inv(M)
         D = polytope.get_D_matrix(state_sys)
         N = polytope.get_N_matrix(state_sys)
-        k = polytope.get_k_vector(state_sys).reshape(
-            3,
-        )
+        k = polytope.get_k_vector(state_sys, None).reshape(3)
 
         # Build the expression.
         P_5 = np.hstack(
