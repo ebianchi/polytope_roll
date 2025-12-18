@@ -174,9 +174,6 @@ class TwoDSystemLCSApproximation:
         p = polytope.n_contacts
         k_friction = polytope.n_friction
 
-        # Need some information about the polytope vertices.
-        radii, angles = polytope.get_vertex_radii_angles()
-
         # Will need the state vector in system form.
         state_sys = self._convert_lcs_state_to_system_state(x)
 
@@ -186,31 +183,15 @@ class TwoDSystemLCSApproximation:
         D = polytope.get_D_matrix(state_sys)
         N = polytope.get_N_matrix(state_sys)
         k = polytope.get_k_vector(state_sys, None).reshape(3)
+        phi = polytope.get_phi(state_sys).reshape(p)
 
         # Build the expression.
-        P_5 = np.hstack(
-            (np.zeros((p, n + 1)), np.ones((p, 1)), np.zeros((p, 1)))
-        )
-        P_6 = np.hstack((np.zeros((p, n + 2)), np.ones((p, 1))))
-
         mat_1 = np.vstack((D.T, N.T, np.zeros((p, n))))
         mat_2 = np.hstack((np.eye(n), np.zeros((n, n))))
-        mat_3 = np.vstack(
-            (np.zeros((p * k_friction, 2 * n)), P_5, np.zeros((p, 2 * n)))
-        )
-        mat_4 = np.vstack(
-            (np.zeros((p * k_friction, p)), np.eye(p), np.zeros((p, p)))
-        )
 
-        diag_r = np.diag(radii)
+        vec = np.hstack((np.zeros(p * k_friction), phi, np.zeros(p)))
 
-        sin_vec = np.sin(P_6 @ x + angles)
-
-        return (
-            mat_1 @ (mat_2 @ x + dt * M_inv @ (k + u))
-            + (1 / dt) * mat_3 @ x
-            + (1 / dt) * mat_4 @ diag_r @ sin_vec
-        )
+        return mat_1 @ (mat_2 @ x + dt * M_inv @ (k + u)) + (1 / dt) * vec
 
     def _get_f_4(self, x):
         """From the nonlinear notation, evaluate the value of f_4 (of shape
@@ -243,7 +224,7 @@ class TwoDSystemLCSApproximation:
 
         return lcp_mat
 
-    def _get_df1_dx(self, _x, _u):
+    def _get_df1_dx(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f1
         with respect to the state at the provided state and control input,
         yielding a jacobian of shape (6,6).  Again, the state is expected to be
@@ -254,13 +235,26 @@ class TwoDSystemLCSApproximation:
         polytope = self.system.params.polytope
         n = polytope.n_config
 
+        # Will need the state vector in system form.
+        state_sys = self._convert_lcs_state_to_system_state(x)
+
+        # Need some polytope properties.
+        M = polytope.get_M_matrix(state_sys)
+        M_inv = np.linalg.inv(M)
+        dk_dq = polytope.get_dk_dq(state_sys, None)
+        dk_dv = polytope.get_dk_dv(state_sys, None)
+
         # Build the expression.
-        return np.vstack(
+        mat_1 = np.vstack(
             (
                 np.hstack((np.eye(n), np.zeros((n, n)))),
                 np.hstack((dt * np.eye(n), np.eye(n))),
             )
         )
+        mat_2 = np.vstack((np.eye(n), dt * np.eye(n)))
+        dk_dx = np.hstack((dk_dv, dk_dq))
+
+        return mat_1 + dt * mat_2 @ M_inv @ dk_dx
 
     def _get_df1_du(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f1
@@ -298,41 +292,31 @@ class TwoDSystemLCSApproximation:
         p = polytope.n_contacts
         k_friction = polytope.n_friction
 
-        # Need some information about the polytope vertices.
-        radii, angles = polytope.get_vertex_radii_angles()
-
         # Will need the state vector in system form.
         state_sys = self._convert_lcs_state_to_system_state(x)
 
-        # Need the contact jacobians.
+        # Need some polytope properties.
+        M = polytope.get_M_matrix(state_sys)
+        M_inv = np.linalg.inv(M)
         D = polytope.get_D_matrix(state_sys)
         N = polytope.get_N_matrix(state_sys)
+        dk_dq = polytope.get_dk_dq(state_sys, None)
+        dk_dv = polytope.get_dk_dv(state_sys, None)
+        dphi_dq = polytope.get_dphi_dq(state_sys)
 
         # Build the expression.
-        P_5 = np.hstack(
-            (np.zeros((p, n + 1)), np.ones((p, 1)), np.zeros((p, 1)))
-        )
-        P_6 = np.hstack((np.zeros((p, n + 2)), np.ones((p, 1))))
-
         mat_1 = np.vstack((D.T, N.T, np.zeros((p, n))))
         mat_2 = np.hstack((np.eye(n), np.zeros((n, n))))
+        dk_dx = np.hstack((dk_dv, dk_dq))
         mat_3 = np.vstack(
-            (np.zeros((p * k_friction, 2 * n)), P_5, np.zeros((p, 2 * n)))
-        )
-        mat_4 = np.vstack(
-            (np.zeros((p * k_friction, p)), np.eye(p), np.zeros((p, p)))
+            (
+                np.zeros((p * k_friction, 2 * n)),
+                np.hstack((np.zeros((p, n)), dphi_dq)),
+                np.zeros((p, 2 * n)),
+            )
         )
 
-        diag_r = np.diag(radii)
-
-        cos_vec = np.cos(P_6 @ x + angles)
-        diag_cos = np.diag(cos_vec)
-
-        return (
-            mat_1 @ mat_2
-            + (1 / dt) * mat_3
-            + (1 / dt) * mat_4 @ diag_r @ diag_cos @ P_6
-        )
+        return mat_1 @ (mat_2 + dt * M_inv @ dk_dx) + (1 / dt) * mat_3
 
     def _get_df3_du(self, x, _u):
         """From the nonlinear notation, evaluate the partial derivative of f3

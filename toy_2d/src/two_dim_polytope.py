@@ -130,6 +130,151 @@ class TwoDimensionalPolytope:
         # Set up a Jacobian function for later calculation of contact Jacobians.
         self.d_pdot_d_qdot_jac_func = self._set_up_contact_jacobian_function()
 
+        # Set up functions for computing corner locations, velocities, signed
+        # distances, and gradients.
+        self._set_up_phi_functions()
+
+        # Set up functions for computing continuous forces.
+        self._set_up_k_functions()
+
+    def _set_up_k_functions(self):
+        """Set up callable functions for computing continuous forces as a
+        function of state.  Produces the following 3 methods:
+
+        1) k_func:  (state) -> (n_config, 1) array of continuous forces.
+        2) dk_dq_func:  (state) -> (n_config, n_config) array of partial
+                derivative of continuous forces with respect to configuration.
+        3) dk_dv_func:  (state) -> (n_config, n_config) array of partial
+                derivative of continuous forces with respect to velocity.
+
+        The continuous forces vector aggregates all contributions due to
+        gravity, Coriolis, and centrifugal forces, and it is defined as:
+
+            k = -C*v - G
+
+        The Coriolis/centrifugal matrix C is defined as:
+
+            C = grad_q(M*v) * v - 0.5 * (grad_q(M*v))^T * v
+
+        This is zero for this polytope since the mass matrix (and generalized
+        velocites) are not configuration dependent.
+        """
+        # Start by getting a symbolic expression of the continuous forces.
+        x, y, theta, vx, vy, vth = sympy.symbols("x y theta vx vy vth")
+        state = (x, vx, y, vy, theta, vth)
+
+        m = self.params.mass
+        g = -9.81
+
+        # 1) Continuous forces as a function of state.
+        k = sympy.Matrix([0, m * g, 0])
+        self.k_func = sympy.lambdify([state], k, "numpy")
+
+        # 2) Partial derivative of continuous forces with respect to
+        # configuration.
+        dk_dq = k.jacobian((x, y, theta))
+        self.dk_dq_func = sympy.lambdify([state], dk_dq, "numpy")
+
+        # 3) Partial derivative of continuous forces with respect to velocity.
+        dk_dv = k.jacobian((vx, vy, vth))
+        self.dk_dv_func = sympy.lambdify([state], dk_dv, "numpy")
+
+    def _set_up_phi_functions(self):
+        """Set up callable functions for computing corner location-related
+        quantities as a function of state.  Produces the following 5 methods:
+
+        1) hull_corners_world_func:  (state) -> (n_contacts, 2) array of corner
+              locations in world frame.
+        2) hull_velocities_func:  (state) -> (n_contacts, 2) array of corner
+              velocities in world frame.
+        3) full_corners_world_func:  (state) -> (n_vertices, 2) array of all
+              vertex locations in world frame (used for visualization, not for
+              contact resolution).
+        4) phi_func:  (state) -> (n_contacts, 1) array of signed distances to
+              ground (y=0).
+        5) phi_jac_func:  (config) -> (n_contacts, 3) array of gradients of
+              signed distances with respect to configuration (x, y, theta).
+        """
+        x, y, theta, vx, vy, vth = sympy.symbols("x y theta vx vy vth")
+        state = (x, vx, y, vy, theta, vth)
+        config = (x, y, theta)
+
+        # 1) Hull corner locations in world as a function of state.
+        hull_corners_world = []
+        p = self.n_contacts
+        for i in range(p):
+            corner_body = self.hull_vertices[i, :]
+
+            phi = np.arctan2(corner_body[1], corner_body[0])
+            radius = np.sqrt(corner_body[1] ** 2 + corner_body[0] ** 2)
+
+            hull_corners_world.append(
+                np.array(
+                    [
+                        x + radius * sympy.cos(phi + theta),
+                        y + radius * sympy.sin(phi + theta),
+                    ]
+                )
+            )
+
+        hull_corners_world = sympy.Matrix(hull_corners_world)
+        self.hull_corners_world_func = sympy.lambdify(
+            [state], hull_corners_world, "numpy"
+        )
+
+        # 2) Hull corner velocities as a function of state.
+        hull_velocities = []
+        radii, angles = self.get_vertex_radii_angles()
+        for i in range(p):
+            radius, phi = radii[i], angles[i]
+
+            rotx_contribution = -vth * radius * sympy.sin(phi + theta)
+            roty_contribution = vth * radius * sympy.cos(phi + theta)
+
+            hull_velocities.append(
+                np.array([vx + rotx_contribution, vy + roty_contribution])
+            )
+
+        hull_velocities = sympy.Matrix(hull_velocities)
+        self.hull_velocities_func = sympy.lambdify(
+            [state], hull_velocities, "numpy"
+        )
+
+        # 3) Full corners in world as a function of state.
+        full_corners_world = []
+        for i in range(self.params.vertex_locations.shape[0]):
+            corner_body = self.params.vertex_locations[i, :]
+
+            phi = np.arctan2(corner_body[1], corner_body[0])
+            radius = np.sqrt(corner_body[1] ** 2 + corner_body[0] ** 2)
+
+            full_corners_world.append(
+                np.array(
+                    [
+                        x + radius * sympy.cos(phi + theta),
+                        y + radius * sympy.sin(phi + theta),
+                    ]
+                )
+            )
+        full_corners_world = sympy.Matrix(full_corners_world)
+        self.full_corners_world_func = sympy.lambdify(
+            [state], full_corners_world, "numpy"
+        )
+
+        # 4) Signed distances to ground (y=0) as a function of state.
+        phis = hull_corners_world[:, 1]
+        self.phi_func = sympy.lambdify([state], phis, "numpy")
+
+        # 5) Gradient of signed distances as a function of configuration.
+        phi_jac = sympy.Matrix(
+            [
+                phis.diff(x).T,
+                phis.diff(y).T,
+                phis.diff(theta).T,
+            ]
+        ).T
+        self.d_phi_d_q_jac_func = sympy.lambdify([config], phi_jac, "numpy")
+
     def _get_convex_hull_vertices(self, vertex_locations):
         """Compute the convex hull of the provided vertices and return the pared
         down numpy array of vertices in clockwise order."""
@@ -148,33 +293,10 @@ class TwoDimensionalPolytope:
         number of vertices in the potentially nonconvex polytope if
         for_visualization is true."""
 
-        # State is in form [x, dx, y, dy, th, dth].
-        x, y, theta = state[0], state[2], state[4]
-
-        # If for visualization purposes, want to include all the vertices.
-        # Otherwise, just include the convex hull vertices.
-        vertices = (
-            self.params.vertex_locations
-            if for_visualization
-            else self.hull_vertices
-        )
-
-        p = vertices.shape[0]
-
-        corners_world = np.zeros((p, 2))
-
-        for i in range(p):
-            corner_body = vertices[i, :]
-
-            phi = np.arctan2(corner_body[1], corner_body[0])
-            radius = np.sqrt(corner_body[1] ** 2 + corner_body[0] ** 2)
-
-            corners_world[i, :] = np.array(
-                [
-                    x + radius * np.cos(phi + theta),
-                    y + radius * np.sin(phi + theta),
-                ]
-            )
+        if for_visualization:
+            corners_world = self.full_corners_world_func(state)
+        else:
+            corners_world = self.hull_corners_world_func(state)
 
         return corners_world
 
@@ -211,24 +333,7 @@ class TwoDimensionalPolytope:
         """Get the velocities of the polytope's vertices in world coordinates,
         given the system's current state.  Returns a numpy array of size
         (n_contacts, 2) for the (vx,vy) velocity of each vertex."""
-
-        # State is in form [x, dx, y, dy, th, dth].
-        theta, vx, vy, vth = state[4], state[1], state[3], state[5]
-
-        p = self.n_contacts
-        radii, angles = self.get_vertex_radii_angles()
-        corner_velocities = np.zeros((p, 2))
-
-        for i in range(p):
-            radius, phi = radii[i], angles[i]
-
-            rotx_contribution = -vth * radius * np.sin(phi + theta)
-            roty_contribution = vth * radius * np.cos(phi + theta)
-
-            corner_velocities[i, :] = np.array(
-                [vx + rotx_contribution, vy + roty_contribution]
-            )
-        return corner_velocities
+        return self.hull_velocities_func(state)
 
     def _set_up_contact_jacobian_function(self):
         """Create a callable function defined by:
@@ -342,50 +447,37 @@ class TwoDimensionalPolytope:
 
         return np.kron(np.eye(p, dtype=int), np.ones((k, 1)))
 
-    def get_C_matrix(self, _):
-        """Calculate the (n_config, n_config) Coriolis/centrifugal matrix.  This
-        is defined as:
-
-            C = grad_q(M*v) * v - 0.5 * (grad_q(M*v))^T * v
-
-        Note that since the polytope's mass matrix (and generalized velocities)
-        are not configuration dependent, this is zero."""
-
-        n = self.n_config
-        return np.zeros((n, n))
-
-    def get_G_vector(self, _):
-        """Calculate the (n_config, 1) vector of gravitational forces."""
-
-        m = self.params.mass
-        g = -9.81
-        return np.array([0, -m * g, 0]).reshape(self.n_config, 1)
-
     def get_k_vector(self, state, _):
-        """Calculate the (n_config, 1) vector of continuous forces.  This vector
-        aggregates all contributions due to gravity, Coriolis, and centrifugal
-        forces, and it is defined as:
-
-            k = -C*v - G
+        """Calculate the (n_config, 1) vector of continuous forces.
 
         The unused hidden_state argument is included for compatibility with
-        other system types that may require it.
+        other system types that may require it."""
+        return self.k_func(state).reshape(self.n_config, 1)
+
+    def get_dk_dq(self, state, _):
+        """Calculate the (n_config, n_config) matrix of gradients of the
+        continuous forces with respect to configuration.  Since the polytope's
+        continuous forces are not configuration dependent, this is zero."""
+        return self.dk_dq_func(state)
+
+    def get_dk_dv(self, state, _):
+        """Calculate the (n_config, n_config) matrix of gradients of the
+        continuous forces with respect to generalized velocities.  Since the
+        polytope's continuous forces are not velocity dependent, this is zero.
         """
-
-        C = self.get_C_matrix(state)
-        G = self.get_G_vector(state)
-
-        vx, vy, vth = state[1], state[3], state[5]
-        v = np.array([vx, vy, vth]).reshape(self.n_config, 1)
-
-        return -C @ v - G
+        return self.dk_dv_func(state)
 
     def get_phi(self, state):
         """Calculate the (n_contacts, 1) vector of interbody distances between
         each vertex and the ground."""
+        return self.phi_func(state).reshape(self.n_contacts, 1)
 
-        corners = self.get_vertex_locations_world(state)
-        return corners[:, 1].reshape(self.n_contacts, 1)
+    def get_dphi_dq(self, state):
+        """Calculate the (n_contacts, n_config) matrix of gradients of the
+        interbody distances with respect to configuration."""
+        x, y, theta = state[0], state[2], state[4]
+        config = (x, y, theta)
+        return self.d_phi_d_q_jac_func(config)
 
     def _analyze_and_store_geometry(self):
         """This method analyzes the geometry of the polytope's convex hull.
